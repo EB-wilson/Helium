@@ -1520,7 +1520,7 @@ data class Name(
 ){
   private val hash = author.hashCode()*31 xor 31 + name.hashCode() xor 31
 
-  constructor(loaded: Mods.LoadedMod): this(loaded.meta.author, loaded.name)
+  constructor(loaded: Mods.LoadedMod): this(loaded.meta.author?:"*", loaded.name)
   constructor(loaded: ModListing): this(loaded.author, loaded.internalName)
 
   override fun hashCode(): Int {
@@ -1531,7 +1531,7 @@ data class Name(
     if (this === other) return true
     if (other !is Name) return false
 
-    if (author != other.author) return false
+    if (author != "*" && author != other.author) return false
     if (name != other.name) return false
 
     return true

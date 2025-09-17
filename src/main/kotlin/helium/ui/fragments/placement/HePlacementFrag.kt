@@ -41,9 +41,7 @@ import mindustry.core.UI
 import mindustry.game.EventType
 import mindustry.game.EventType.BlockInfoEvent
 import mindustry.game.EventType.WorldLoadEvent
-import mindustry.gen.Call
-import mindustry.gen.Icon
-import mindustry.gen.Tex
+import mindustry.gen.*
 import mindustry.gen.Unit
 import mindustry.graphics.Pal
 import mindustry.input.Binding
@@ -981,9 +979,18 @@ class HePlacementFrag {
       })
     }
 
+    private fun slotName(): String? {
+      return if (Vars.net.server()) {
+        if (Vars.state.isCampaign) Vars.state.planet?.let { "planet#${"${it.name}"}}" } ?: "#unknow"
+        else {
+          "save#${Vars.control.saves.current.file.nameWithoutExtension().replace("-", "_")}"
+        }
+      }
+      else null //unsave when remote
+    }
+
     fun save(){
-      val currPlanet = if (Vars.state.isCampaign) Vars.state.planet?.let {"sector#${ "${it.name}" }}"} ?: "#unknow"
-      else "save#${Vars.control.saves.current.file.nameWithoutExtension().replace("-", "_")}"
+      val currPlanet = slotName()?: return
 
       blocks.forEachIndexed { i, block ->
         He.global.put("${currPlanet}-fast-slot-$id-$i", block?.name?:"!empty")
@@ -991,8 +998,7 @@ class HePlacementFrag {
     }
 
     fun load(){
-      val currPlanet = if (Vars.state.isCampaign) Vars.state.planet?.let {"sector#${ "${it.name}" }}"} ?: "#unknow"
-      else "save#${Vars.control.saves.current.file.nameWithoutExtension().replace("-", "_")}"
+      val currPlanet = slotName()?: return
 
       for (i in 0 until blocks.size) {
         val name = He.global.getString("${currPlanet}-fast-slot-$id-$i", "!empty")

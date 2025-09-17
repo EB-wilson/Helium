@@ -50,15 +50,8 @@ object ScreenSampler {
 
       Core.settings.put("sampler.setup", e.toString())
 
-      Events.run(EventType.Trigger.preDraw) {
-        if (Vars.renderer.pixelate){
-          pixelatorBuffer.end()
-          beginWorld()
-          pixelatorBuffer.begin()
-        }
-        else beginWorld()
-      }
       Events.run(EventType.Trigger.draw) {
+        Draw.draw(Layer.min - 0.001f) { beginWorld() }
         Draw.draw(Layer.end + 0.001f) { endWorld() }
       }
 
@@ -88,22 +81,36 @@ object ScreenSampler {
   }
 
   private fun beginWorld() {
-    currBuffer = worldBuffer
-    worldBuffer!!.resize(Core.graphics.width, Core.graphics.height)
-    worldBuffer!!.begin(Color.clear)
+    if (Vars.renderer.pixelate) {
+      currBuffer = pixelatorBuffer
+    }
+    else {
+      currBuffer = worldBuffer
+
+      if (worldBuffer!!.isBound) return
+
+      worldBuffer!!.resize(Core.graphics.width, Core.graphics.height)
+      worldBuffer!!.begin(Color.clear)
+    }
   }
 
   private fun endWorld() {
-    currBuffer = null
-    worldBuffer!!.end()
-    blitBuffer(worldBuffer!!, null)
+    if (!Vars.renderer.pixelate) {
+      worldBuffer!!.end()
+      blitBuffer(worldBuffer!!, null)
+    }
   }
 
   private fun beginUI() {
     currBuffer = uiBuffer
+
+    if (uiBuffer!!.isBound) return
+
     uiBuffer!!.resize(Core.graphics.width, Core.graphics.height)
     uiBuffer!!.begin(Color.clear)
-    blitBuffer(worldBuffer!!, uiBuffer)
+
+    if (Vars.renderer.pixelate) blitBuffer(pixelatorBuffer, uiBuffer)
+    else blitBuffer(worldBuffer!!, uiBuffer)
   }
 
   private fun endUI() {
