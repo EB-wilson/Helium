@@ -30,6 +30,7 @@
  * val resultStatic = staticRef(arg1, arg2)
  * ```
  *
+ * @version 1.0
  * @author EBwilson*/
 
 package helium.util
@@ -193,6 +194,11 @@ inline fun <reified O: Any> accessBoolean(name: String) =
   })
 
 // static
+private fun checkPrimitiveFinal(field: Field) {
+  if (Modifier.isFinal(field.modifiers))
+    throw IllegalArgumentException("The static final field is always immutable, you shouldn't reflect these fields")
+}
+
 inline fun <U, reified T> KClass<*>.accessField(name: String) =
   FieldAccessorStatic<U, T>(this.java.getDeclaredField(name).also {
     if (!it.type.isAssignableFrom(T::class.java))
@@ -205,24 +211,22 @@ fun <U> KClass<*>.accessByte(name: String) =
   ByteAccessorStatic<U>(this.java.getDeclaredField(name).also {
     if (it.type != Byte::class.java)
       throw IllegalArgumentException("field $it type is not byte")
-    if (Modifier.isFinal(it.modifiers))
-      throw IllegalArgumentException("The static final field is always immutable, you shouldn't reflect these fields")
+    checkPrimitiveFinal(it)
     it.isAccessible = true
   })
 fun <U> KClass<*>.accessShort(name: String) =
   ShortAccessorStatic<U>(this.java.getDeclaredField(name).also {
     if (it.type != Short::class.java)
       throw IllegalArgumentException("field $it type is not short")
-    if (Modifier.isFinal(it.modifiers))
-      throw IllegalArgumentException("The static final field is always immutable, you shouldn't reflect these fields")
+    checkPrimitiveFinal(it)
     it.isAccessible = true
   })
+
 fun <U> KClass<*>.accessInt(name: String) =
   IntAccessorStatic<U>(this.java.getDeclaredField(name).also {
     if (it.type != Int::class.java)
       throw IllegalArgumentException("field $it type is not int")
-    if (Modifier.isFinal(it.modifiers))
-      throw IllegalArgumentException("The static final field is always immutable, you shouldn't reflect these fields")
+    checkPrimitiveFinal(it)
     it.isAccessible = true
   })
 fun <U> KClass<*>.accessLong(name: String) =
@@ -237,24 +241,21 @@ fun <U> KClass<*>.accessFloat(name: String) =
   FloatAccessorStatic<U>(this.java.getDeclaredField(name).also {
     if (it.type != Float::class.java)
       throw IllegalArgumentException("field $it type is not float")
-    if (Modifier.isFinal(it.modifiers))
-      throw IllegalArgumentException("The static final field is always immutable, you shouldn't reflect these fields")
+    checkPrimitiveFinal(it)
     it.isAccessible = true
   })
 fun <U> KClass<*>.accessDouble(name: String) =
   DoubleAccessorStatic<U>(this.java.getDeclaredField(name).also {
     if (it.type != Double::class.java)
       throw IllegalArgumentException("field $it type is not double")
-    if (Modifier.isFinal(it.modifiers))
-      throw IllegalArgumentException("The static final field is always immutable, you shouldn't reflect these fields")
+    checkPrimitiveFinal(it)
     it.isAccessible = true
   })
 fun <U> KClass<*>.accessBoolean(name: String) =
   BooleanAccessorStatic<U>(this.java.getDeclaredField(name).also {
     if (it.type != Boolean::class.java)
       throw IllegalArgumentException("field $it type is not boolean")
-    if (Modifier.isFinal(it.modifiers))
-      throw IllegalArgumentException("The static final field is always immutable, you shouldn't reflect these fields")
+    checkPrimitiveFinal(it)
     it.isAccessible = true
   })
 

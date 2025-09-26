@@ -15,6 +15,7 @@ import arc.struct.ObjectIntMap
 import arc.struct.ObjectMap
 import arc.util.Log
 import arc.util.Strings
+import arc.util.Time
 import helium.graphics.HeShaders
 import helium.graphics.ShieldRenderer
 import helium.ui.HeAssets
@@ -120,11 +121,9 @@ object He {
     placement = HePlacementFrag()
     setupTools(placement)
     placement.cleanGlobal()
-    placement.build(Vars.ui.hudGroup)
 
     entityInfo = EntityInfoFrag()
     setupDisplays(entityInfo)
-    entityInfo.build(Vars.ui.hudGroup)
 
     configDialog = ModConfigDialog()
     setupSettings(configDialog)
@@ -146,6 +145,15 @@ object He {
         32f
       ) { configDialog.show() }.marginLeft(8f).row();
     }
+
+    Events.on(EventType.ClientLoadEvent::class.java) {
+      Time.run(1f) { postHandle() }
+    }
+  }
+
+  private fun postHandle() {
+    placement.build(Vars.ui.hudGroup)
+    entityInfo.build(Vars.ui.hudGroup)
   }
 
   private fun setupHeModsDialog(heModsDialog: HeModsDialog) {

@@ -104,6 +104,8 @@ object UIUtils {
     build: Cons<Table>
   ): Dialog {
     val dialog = Dialog()
+
+    dialog.fillParent = true
     dialog.cont.table(HeAssets.grayUIAlpha){ info ->
       title?.also {
         info.add(it).color(titleColor).pad(8f)
@@ -111,7 +113,7 @@ object UIUtils {
         info.line(Pal.accent, true, 3f).padTop(4f).padLeft(-6f).padRight(-6f)
         info.row()
       }
-      info.pane(build).grow().minSize(360f, 100f).pad(12f)
+      info.pane(build).grow().minSize(380f, 120f).pad(12f)
       info.row()
       info.table { but ->
         but.defaults().growX().height(46f).minWidth(82f).pad(4f)
@@ -130,7 +132,7 @@ object UIUtils {
           }
         }
       }.growX().fillY()
-    }.margin(6f).grow()
+    }.margin(6f).fill().pad(6f)
 
     return dialog.show()
   }

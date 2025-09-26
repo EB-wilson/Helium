@@ -313,6 +313,8 @@ class HeModsDialog: BaseDialog(Core.bundle["mods"]) {
   }
 
   private fun refresh() {
+    UIUtils.showException(Exception(), Core.bundle["dialog.mods.checkFailed"])
+
     modList = null
     modTabs.clear()
     rebuildMods()

@@ -36,6 +36,8 @@ import helium.ui.elements.roulette.StripButton
 import helium.ui.elements.roulette.StripButtonStyle
 import helium.ui.elements.roulette.StripWrap
 import helium.ui.fragments.entityinfo.Side.*
+import helium.util.IndexedSerial
+import helium.util.SerialObject
 import helium.util.accessField
 import mindustry.Vars
 import mindustry.entities.Units
@@ -85,11 +87,18 @@ class EntityInfoFrag {
   private val hoveringProviders = Seq<DisplayProvider<*, *>>()
 
   private val entityEntries = IntMap<EntityEntry>()
-  private val entriesList = Seq<EntityEntry>(EntityEntry::class.java)//Indexed array, elements are repeatable, for all entries and hovering only entries
+  //Indexed array, elements are repeatable, for all entries and hovering only entries
+  private val entriesList = IndexedSerial<EntityEntry>(
+    elementType = EntityEntry::class,
+    indexOrder = 0
+  )
 
   private val hoveringEntries = IntMap<EntityEntry>()
-  private val hoveringList = Seq<EntityEntry>(EntityEntry::class.java)//foreach optimize
-
+  //foreach optimize
+  private val hoveringList = IndexedSerial<EntityEntry>(
+    elementType = EntityEntry::class,
+    indexOrder = 1
+  )
   private val hovering = ObjectSet<EntityEntry>()
   private val holding = ObjectSet<EntityEntry>()
 
@@ -469,12 +478,10 @@ class EntityInfoFrag {
     if (entry.displays.any()) {
       if (hovering) {
         hoveringEntries[entity.id()] = entry
-        entry.index1 = hoveringList.size
         hoveringList.add(entry)
       }
       else entityEntries[entity.id()] = entry
 
-      entry.index = entriesList.size
       entriesList.add(entry)
 
       return entry
@@ -487,23 +494,14 @@ class EntityInfoFrag {
     val ent = (if (hovering) hoveringEntries else entityEntries).remove(entity.id())
     if (ent == null) return
 
-    if (hovering) hoveringList.removeIndexed(ent.index1) { e, i -> e.index1 = i }
-    entriesList.removeIndexed(ent.index) { e, i -> e.index = i }
+    if (hovering) hoveringList.remove(ent)
+    entriesList.remove(ent)
 
     ent.displays.forEach { display ->
       if (display is InputEventChecker) display.element.remove()
     }
 
     Pools.free(ent)
-  }
-
-  private fun <T> Seq<T>.removeIndexed(index: Int, indexUpdater: (T, Int) -> kotlin.Unit) {
-    val end = size - 1
-    val items = items
-    items[index] = items[end]
-    indexUpdater(items[index], index)
-    items[end] = null
-    size--
   }
 
   fun setupEntry(){
@@ -699,10 +697,10 @@ class EntityInfoFrag {
       selectStart.setZero()
     }
 
-    val list = hoveringList.items
+    val list = hoveringList.array
     var i = 0
     while (i < hoveringList.size){
-      val e = list[i]
+      val e = list[i]!!
       if (e.showing || e.holding) {
         e.showing = false
         e.alpha = Mathf.approachDelta(e.alpha, 1f, 0.05f)
@@ -894,9 +892,8 @@ class EntityInfoFrag {
 class EntityEntry(
   val entity: Teamc,
   val isHovering: Boolean
-) {
-  var index = -1
-  var index1 = -1
+): SerialObject {
+  override var indexes = intArrayOf(-1, -1)
   var player: Playerc? = null
 
   var mouseHovering = false
