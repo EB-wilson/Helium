@@ -1,6 +1,6 @@
 # Helium
 
-> **点击[>> 这里 <<](README_zh_CN.md)查看中文文档**
+> **点击[>> 这里 <<](README_zh_CN.md)查看中文文档**<br>
 > **[РУССКИЙ ЯЗЫК](README_ru_RU.md)**
 
 <!--suppress ALL -->
