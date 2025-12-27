@@ -744,7 +744,7 @@ class HePlacementFrag {
           ) Color.white
           else Color.gray
         button.forEach { elem -> elem.setColor(color) }
-        button.setChecked(currBlock === block)
+        button.setChecked(currBlock == block)
         if (!block.isPlaceable) {
           button.forEach { elem -> elem.setColor(Color.darkGray) }
         }
@@ -826,7 +826,7 @@ class HePlacementFrag {
       if (invAnimateActivating) return@button
 
       invPage = (invPage + 1)%3
-      currentSlot = null
+      currBlock = currentSlot?.block
     }.update { b -> listen(b, HeKeyBindings.switchFastPageHotKey) }.get().also {
       if (Core.app.isDesktop) {
         it.fill { x, y, w, h ->
