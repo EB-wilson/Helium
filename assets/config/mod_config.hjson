@@ -26,6 +26,8 @@
   "rangeRenderLevel": 0,
   //显示实体攻击范围
   "showAttackRange": true,
+  //显示攻击角度
+  "showAttackAngle": true,
   //显示修复范围
   "showHealRange": true,
   //显示超速投影作用范围
