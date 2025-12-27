@@ -8,12 +8,12 @@ import arc.util.serialization.Jval
 import helium.graphics.HeShaders
 import helium.ui.fragments.entityinfo.displays.EntityRangeDisplay
 import java.io.IOException
+import kotlin.concurrent.thread
 
 private typealias RArray = java.lang.reflect.Array
 
 class HeConfig(configDir: Fi, internalSource: Fi) {
   companion object {
-    private var exec = Threads.unboundedExecutor("HTTP", 1)
     private val commentMatcher = Regex("(//.*)|(/\\*(.|\\s)+\\*/)")
     private val keyMatcher = Regex("\"?(\\w+)\"?\\s*:\\s*")
     private val jsonArrayMatcher = Regex("\\[(.|\\s)*]")
@@ -52,6 +52,8 @@ class HeConfig(configDir: Fi, internalSource: Fi) {
         else -> null
       }
     }
+  @ConfigItem var showAttackAngle = true
+    set(value){ field = value; He.entityInfo.displaySetupUpdated() }
   @ConfigItem var showAttackRange = true
     set(value){ field = value; He.entityInfo.displaySetupUpdated() }
   @ConfigItem var showHealRange = true
@@ -142,7 +144,7 @@ class HeConfig(configDir: Fi, internalSource: Fi) {
   }
 
   fun saveAsync() {
-    exec.submit {
+    thread(true){
       synchronized(this, ::save)
     }
   }

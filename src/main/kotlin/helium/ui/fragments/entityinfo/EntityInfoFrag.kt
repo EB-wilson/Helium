@@ -733,7 +733,7 @@ class EntityInfoFrag {
     var i = 0
     while (i < hoveringList.size){
       val e = list[i]!!
-      if (e.showing || e.holding) {
+      if (e.entity.isAdded && (e.showing || e.holding)) {
         e.showing = false
         e.alpha = Mathf.approachDelta(e.alpha, 1f, 0.05f)
       }

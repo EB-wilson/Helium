@@ -332,6 +332,10 @@ object He {
         else -> Core.bundle["range.animate.prof"]
       } },
       ConfigCheck(
+        "showAttackAngle",
+        config::showAttackAngle
+      ),
+      ConfigCheck(
         "showAttackRange",
         config::showAttackRange
       ),

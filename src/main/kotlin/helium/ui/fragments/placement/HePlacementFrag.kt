@@ -984,7 +984,7 @@ class HePlacementFrag {
     }
 
     private fun slotName(): String? {
-      return if (Vars.net.server()) {
+      return if (!Vars.net.active() || Vars.net.server()) {
         if (Vars.state.isCampaign) Vars.state.planet?.let { "planet#${"${it.name}"}}" } ?: "#unknow"
         else {
           "save#${Vars.control.saves.current.file.nameWithoutExtension().replace("-", "_")}"

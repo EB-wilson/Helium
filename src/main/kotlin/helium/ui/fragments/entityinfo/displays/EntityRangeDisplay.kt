@@ -106,6 +106,11 @@ class EntityRangeDisplayProvider: DisplayProvider<Ranged, EntityRangeDisplay>(),
   }
   override fun getConfigures() = listOf(
     ConfigPair(
+      "showAttackAngle",
+      Icon.down,
+      He.config::showAttackAngle
+    ),
+    ConfigPair(
       "showAttackRange",
       Icon.turret,
       He.config::showAttackRange
@@ -236,7 +241,7 @@ class EntityRangeDisplay(
       )
     }
 
-    if (holding) {
+    if (He.config.showAttackAngle && holding) {
       Draw.z(Layer.light + 5)
       Draw.color(entity.team().color, 0.1f + Mathf.absin(8f, 0.15f))
       if (isTurret && entity is TurretBuild) drawTurretAttackCone(entity)
