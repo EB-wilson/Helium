@@ -6,6 +6,7 @@ import arc.func.*
 import arc.graphics.Color
 import arc.graphics.g2d.Draw
 import arc.graphics.g2d.Lines
+import arc.input.KeyBind
 import arc.input.KeyCode
 import arc.math.Interp
 import arc.math.Mathf
@@ -30,6 +31,7 @@ import helium.He.config
 import helium.ui.HeAssets
 import helium.ui.UIUtils.line
 import helium.ui.elements.HeCollapser
+import helium.util.HeKeyBindings
 import helium.util.accessField
 import helium.util.ifInst
 import mindustry.Vars
@@ -801,7 +803,7 @@ class HePlacementFrag {
     table.row()
 
     val event = InputEvent()
-    fun listen(b: ImageButton, key: KeyCode) {
+    fun listen(b: ImageButton, key: KeyBind) {
       if (Core.scene.hasKeyboard()) return
 
       if (Core.input.keyDown(key)) {
@@ -825,11 +827,11 @@ class HePlacementFrag {
 
       invPage = (invPage + 1)%3
       currentSlot = null
-    }.update { b -> listen(b, config.switchFastPageHotKey) }.get().also {
+    }.update { b -> listen(b, HeKeyBindings.switchFastPageHotKey) }.get().also {
       if (Core.app.isDesktop) {
         it.fill { x, y, w, h ->
           Fonts.outline.draw(
-            config.switchFastPageHotKey.value,
+            HeKeyBindings.switchFastPageHotKey.value.key.value,
             x, y + h - Fonts.outline.capHeight*0.6f,
             Color.white, 0.65f, true,
             Align.left
@@ -843,14 +845,14 @@ class HePlacementFrag {
         foldIcon = it
         it.resizeImage(28f)
         it.clicked { toggleSelectionShown() }
-        it.update { listen(it, config.placementFoldHotKey) }
+        it.update { listen(it, HeKeyBindings.placementFoldHotKey) }
       },
       object: Element(){
         override fun draw() {
           validate()
           if (Core.app.isDesktop) {
             Fonts.outline.draw(
-              config.placementFoldHotKey.value,
+              HeKeyBindings.placementFoldHotKey.value.key.value,
               x, y + height - Fonts.outline.capHeight*0.65f,
               Color.white, 0.65f, true,
               Align.left

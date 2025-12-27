@@ -292,6 +292,10 @@ object He {
         Pal.accent,
         Pal.accentBack
       ),
+      ConfigCheck(
+        "useFixedHoveringInfoPane",
+        config::useFixedHoveringInfoPane
+      ),
       ConfigSlider(
         "entityInfoScale",
         config::entityInfoScale,
@@ -350,10 +354,6 @@ object He {
         "enableBetterPlacement",
         config::enableBetterPlacement
       ),
-      ConfigCheck(
-        "useFixedHoveringInfoPane",
-        config::useFixedHoveringInfoPane
-      ),
       ConfigSlider(
         "blockColumns",
         config::blockColumns,
@@ -369,29 +369,6 @@ object He {
       ConfigCheck(
         "enableBetterModsDialog",
         config::enableBetterModsDialog
-      ),
-    )
-    conf.addConfig(
-      "keyBind", Icon.grid,
-      ConfigSepLine(
-        "entityInfo",
-        Core.bundle["settings.keyBind.entityInfo"],
-      ),
-      ConfigKeyBind(
-        "entityInfoHotKey",
-        config::entityInfoHotKey
-      ),
-      ConfigSepLine(
-        "placement",
-        Core.bundle["settings.keyBind.placement"],
-      ),
-      ConfigKeyBind(
-        "placementFoldHotKey",
-        config::placementFoldHotKey
-      ),
-      ConfigKeyBind(
-        "switchFastPageHotKey",
-        config::switchFastPageHotKey
       ),
     )
     conf.addConfig(

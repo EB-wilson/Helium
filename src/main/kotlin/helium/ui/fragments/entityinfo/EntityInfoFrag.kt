@@ -1,6 +1,7 @@
 package helium.ui.fragments.entityinfo
 
 import arc.Core
+import arc.Events
 import arc.graphics.Color
 import arc.graphics.g2d.Draw
 import arc.graphics.g2d.Fill
@@ -47,6 +48,7 @@ import helium.util.exitSt
 import helium.util.poolObtain
 import mindustry.Vars
 import mindustry.entities.Units
+import mindustry.game.EventType
 import mindustry.game.Team
 import mindustry.gen.*
 import mindustry.gen.Unit
@@ -117,7 +119,13 @@ class EntityInfoFrag {
   private val screenViewport = Rect()
 
   private lateinit var infoFill: Group
-  private lateinit var configPane: Table
+  private var configPane: Table? = null
+
+  init {
+    Events.on(EventType.ResizeEvent::class.java) {
+      configPane?.also { buildConfig(it) }
+    }
+  }
 
   /**for hot-update*/
   fun displaySetupUpdated(){
@@ -188,13 +196,13 @@ class EntityInfoFrag {
   }
 
   fun toggleSwitchConfig() {
-    if (configPane.visible) {
+    if (configPane!!.visible) {
       config.saveAsync()
-      configPane.visible = false
+      configPane!!.visible = false
     }
     else {
-      buildConfig(configPane)
-      configPane.visible = true
+      buildConfig(configPane!!)
+      configPane!!.visible = true
     }
   }
 

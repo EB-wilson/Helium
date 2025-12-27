@@ -66,8 +66,6 @@ class HeConfig(configDir: Fi, internalSource: Fi) {
   @ConfigItem var useFixedHoveringInfoPane = true
   @ConfigItem var blockColumns = 5
     set(value){ field = value; He.placement.rebuildCategory() }
-  @ConfigItem var switchFastPageHotKey = KeyCode.tab
-  @ConfigItem var placementFoldHotKey = KeyCode.q
 
   @ConfigItem var enableBetterModsDialog = true
 
