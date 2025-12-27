@@ -15,7 +15,10 @@ import arc.util.Tmp
 import helium.He
 import helium.graphics.DrawUtils
 import helium.graphics.HeShaders
+import helium.ui.elements.HeCollapser
 import helium.ui.fragments.entityinfo.*
+import helium.util.enterSt
+import helium.util.exitSt
 import mindustry.game.Team
 import mindustry.gen.Building
 import mindustry.gen.Icon
@@ -91,9 +94,15 @@ class EntityRangeDisplayProvider: DisplayProvider<Ranged, EntityRangeDisplay>(),
   }
 
   override fun buildConfig(table: Table) {
-    table.image(Icon.diagonal).size(64f).scaling(Scaling.fit)
+    table.image(Icon.diagonal).size(80f).scaling(Scaling.fit)
     table.row()
-    table.add(Core.bundle["infos.entityRange"], Styles.outlineLabel)
+    table.add(HeCollapser(collX = false, collY = true, collapsed = true){
+      it.add(Core.bundle["infos.entityRange"], Styles.outlineLabel)
+    }.also { col ->
+      col.setDuration(0.35f, Interp.pow2Out)
+      table.parent.enterSt { col.setCollapsed(false) }
+      table.parent.exitSt { col.setCollapsed(true) }
+    })
   }
   override fun getConfigures() = listOf(
     ConfigPair(

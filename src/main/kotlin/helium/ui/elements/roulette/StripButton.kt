@@ -8,14 +8,14 @@ import arc.scene.ui.layout.Table
 import arc.scene.utils.Disableable
 import arc.util.pooling.Pools
 import helium.graphics.StripDrawable
-import helium.invoke
 
 open class StripButton(
   buttonStyle: StripButtonStyle,
-  element: Element = Element(),
-): StripWrap(element), Disableable {
-  constructor(buttonStyle: StripButtonStyle, builder: Cons<Table>):
-      this(buttonStyle, Table().also { builder(it) })
+  private val elem: Element = Element(),
+): StripWrap(elem), Disableable {
+  constructor(buttonStyle: StripButtonStyle, builder: Cons<Table>): this(buttonStyle, Table()){
+    builder.get(elem as Table)
+  }
 
   var clickListener: ClickListener
     private set

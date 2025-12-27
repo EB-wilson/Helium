@@ -5,6 +5,7 @@ import arc.graphics.Color
 import arc.graphics.g2d.Draw
 import arc.graphics.g2d.Fill
 import arc.graphics.g2d.Lines
+import arc.math.Interp
 import arc.math.Mathf
 import arc.math.geom.Geometry
 import arc.math.geom.QuadTree
@@ -23,6 +24,7 @@ import arc.struct.Seq
 import arc.util.Scaling
 import arc.util.Time
 import arc.util.Tmp
+import arc.util.pooling.Pool
 import arc.util.pooling.Pools
 import helium.He
 import helium.He.config
@@ -32,6 +34,7 @@ import helium.graphics.FillStripDrawable
 import helium.set
 import helium.ui.HeAssets
 import helium.ui.HeStyles
+import helium.ui.elements.HeCollapser
 import helium.ui.elements.roulette.StripButton
 import helium.ui.elements.roulette.StripButtonStyle
 import helium.ui.elements.roulette.StripWrap
@@ -39,6 +42,9 @@ import helium.ui.fragments.entityinfo.Side.*
 import helium.util.IndexedSerial
 import helium.util.SerialObject
 import helium.util.accessField
+import helium.util.enterSt
+import helium.util.exitSt
+import helium.util.poolObtain
 import mindustry.Vars
 import mindustry.entities.Units
 import mindustry.game.Team
@@ -230,12 +236,23 @@ class EntityInfoFrag {
     val stack = Stack()
     stack.addEventBlocker()
 
-    val radius = min(min(Core.graphics.width, Core.graphics.height)/2f - Scl.scl(40f), Scl.scl(460f))
+    val radius = min(min(Core.graphics.width, Core.graphics.height)/2f - Scl.scl(30f), Scl.scl(460f))
     val r1 = radius*0.3f
     val r2 = radius*0.44f
     val r3 = radius*0.76f
     val r4 = radius
     val off = Scl.scl(3f)
+
+    val toolTip = { table: Table, str: String ->
+      table.row()
+      table.add(HeCollapser(collX = false, collY = true, collapsed = true){
+        it.add(str, Styles.outlineLabel, 0.75f)
+      }.also { col ->
+        col.setDuration(0.35f, Interp.pow2Out)
+        table.parent.enterSt { col.setCollapsed(false) }
+        table.parent.exitSt { col.setCollapsed(true) }
+      })
+    }
 
     stack.add(StripWrap(background = HeStyles.blurStrip).also {
       it.setCBounds(
@@ -250,41 +267,6 @@ class EntityInfoFrag {
       )
     })
 
-    stack.add(StripButton(HeStyles.clearS){
-      it.image(Icon.none).size(42f).scaling(Scaling.fit)
-      it.row()
-      it.add(Core.bundle["infos.disableAll"], Styles.outlineLabel, 0.75f)
-    }.also {
-      it.setCBounds(
-        90f, 0f,
-        120f, r1 - off
-      )
-      it.clicked { disabledTeams.values().forEach { bits -> Arrays.fill(bits.bits, -0x1L) } }
-    })
-    stack.add(StripButton(HeStyles.clearS){
-      it.image(Icon.filters).size(42f).scaling(Scaling.fit)
-      it.row()
-      it.add(Core.bundle["infos.allSetting"], Styles.outlineLabel, 0.75f)
-    }.also {
-      it.setCBounds(
-        210f, 0f,
-        120f, r1 - off
-      )
-      it.clicked { He.configDialog.show("entityInfo") }
-    })
-    stack.add(StripButton(HeStyles.clearS){
-      it.image(Icon.effect).size(42f).scaling(Scaling.fit)
-      it.row()
-      it.add(Core.bundle["infos.enableAll"], Styles.outlineLabel, 0.75f)
-    }.also {
-      it.setCBounds(
-        330f, 0f,
-        120f, r1 - off
-      )
-      it.clicked {
-        disabledTeams.values().forEach { bits -> Arrays.fill(bits.bits, 0) }
-      }
-    })
     stack.add(StripWrap(background = HeAssets.whiteEdge).also {
       it.setColor(Pal.darkestGray)
       it.setCBounds(
@@ -349,14 +331,6 @@ class EntityInfoFrag {
 
     val displayButtonDelta = 360f/providers.size
     providers.forEachIndexed{ i, dis ->
-      stack.add(StripButton(outerStyle){ dis.buildConfig(it) }.also {
-        it.setCBounds(
-          90f + displayButtonDelta*i, r2 + off,
-          displayButtonDelta, r3 - r2 - off
-        )
-        it.update { it.isChecked = current == dis }
-        it.clicked { current = dis }
-      })
       if (dis is ConfigurableDisplay){
         stack.add(StripWrap(background = HeStyles.black5).also {
           it.setCBounds(
@@ -374,14 +348,6 @@ class EntityInfoFrag {
             )
           })
           list.forEachIndexed { ci, conf ->
-            stack.add(StripButton(HeStyles.toggleClearS){ conf.build(it) }.also {
-              it.setCBounds(
-                90f + displayButtonDelta*i + configButtonDelta*ci, r3 + off,
-                configButtonDelta, r4 - r3 - off
-              )
-              conf.checked?.also { ch -> it.update { it.isChecked = ch.get() } }
-              it.clicked { conf.callback.run() }
-            })
             stack.add(StripWrap(background = HeAssets.whiteEdge).also {
               it.setColor(Pal.darkestGray)
               it.setCBounds(
@@ -406,6 +372,66 @@ class EntityInfoFrag {
           0f, r3 - r2 - off
         )
       })
+    }
+
+    stack.add(StripButton(HeStyles.clearS){
+      it.image(Icon.none).size(42f).scaling(Scaling.fit)
+      toolTip(it, Core.bundle["infos.disableAll"])
+    }.also {
+      it.setCBounds(
+        90f, 0f,
+        120f, r1 - off
+      )
+      it.clicked { disabledTeams.values().forEach { bits -> Arrays.fill(bits.bits, -0x1L) } }
+    })
+    stack.add(StripButton(HeStyles.clearS){
+      it.image(Icon.filters).size(42f).scaling(Scaling.fit)
+      toolTip(it, Core.bundle["infos.allSetting"])
+    }.also {
+      it.setCBounds(
+        210f, 0f,
+        120f, r1 - off
+      )
+      it.clicked { He.configDialog.show("entityInfo") }
+    })
+    stack.add(StripButton(HeStyles.clearS){
+      it.image(Icon.effect).size(42f).scaling(Scaling.fit)
+      toolTip(it, Core.bundle["infos.enableAll"])
+    }.also {
+      it.setCBounds(
+        330f, 0f,
+        120f, r1 - off
+      )
+      it.clicked {
+        disabledTeams.values().forEach { bits -> Arrays.fill(bits.bits, 0) }
+      }
+    })
+
+    providers.forEachIndexed { i, dis ->
+      stack.add(StripButton(outerStyle) { dis.buildConfig(it) }.also {
+        it.setCBounds(
+          90f + displayButtonDelta*i, r2 + off,
+          displayButtonDelta, r3 - r2 - off
+        )
+        it.update { it.isChecked = current == dis }
+        it.clicked { current = dis }
+      })
+
+      if (dis is ConfigurableDisplay){
+        dis.getConfigures().also { list ->
+          val configButtonDelta = displayButtonDelta/list.size
+          list.forEachIndexed { ci, conf ->
+            stack.add(StripButton(HeStyles.toggleClearS){ conf.build(it) }.also {
+              it.setCBounds(
+                90f + displayButtonDelta*i + configButtonDelta*ci, r3 + off,
+                configButtonDelta, r4 - r3 - off
+              )
+              conf.checked?.also { ch -> it.update { it.isChecked = ch.get() } }
+              it.clicked { conf.callback.run() }
+            })
+          }
+        }
+      }
     }
 
     table.add(stack).size(0f)
@@ -458,6 +484,7 @@ class EntityInfoFrag {
   fun addEntry(entity: Entityc, hovering: Boolean = false): EntityEntry? {
     if (entity !is Teamc) return null
 
+    //val entry = poolObtain{ EntityEntry(entity, hovering) }
     val entry = EntityEntry(entity, hovering)
 
     (if (hovering) hoveringProviders else providers).forEach { prov ->
@@ -487,7 +514,6 @@ class EntityInfoFrag {
       return entry
     }
 
-    Pools.free(entry)
     return null
   }
   fun removeEntry(entity: Entityc, hovering: Boolean = false) {
@@ -500,8 +526,6 @@ class EntityInfoFrag {
     ent.displays.forEach { display ->
       if (display is InputEventChecker) display.element.remove()
     }
-
-    Pools.free(ent)
   }
 
   fun setupEntry(){
@@ -600,8 +624,8 @@ class EntityInfoFrag {
         val disabledTeam = disabledTeams[display.typeID]
         if (disabledTeam.get(display.team.id)) return@forEach
 
-        val e = entityEntries[display.id].entity
-        if (!display.shouldDisplay() || !display.checkWorldClip(e, worldViewport)) return@forEach
+        val ent = entityEntries[display.id].entity
+        if (!display.shouldDisplay() || !display.checkWorldClip(ent, worldViewport)) return@forEach
         display.drawWorld(a)
       }
     }

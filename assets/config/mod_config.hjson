@@ -1,5 +1,5 @@
 {
-  "configVersion": 4,
+  "configVersion": 5,
 
   //=====Basic/基础设置=====//
 
@@ -33,6 +33,8 @@
 
   //启用更好的放置面板
   "enableBetterPlacement": true,
+  //使用固定的悬停目标信息面板
+  "useFixedHoveringInfoPane": true,
   //方块放置面板显示列数
   "blockColumns": 5,
 

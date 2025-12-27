@@ -89,6 +89,7 @@ class HePlacementFrag {
   private lateinit var topLevel: Table
   private lateinit var container: Table
   private lateinit var topInfo: Table
+  private lateinit var commandPane: Table
 
   private var wasHovered = false
   private var lastDisplayBlock: Block? = null
@@ -241,6 +242,7 @@ class HePlacementFrag {
         },
         Table{ commands ->
           commands.bottom().right().add(HeCollapser(collX = false, collY = true, collapsed = true, Tex.pane) { com ->
+            commandPane = com
             buildCommands(com)
           }.setDuration(0.2f, Interp.pow3Out).setCollapsed { !Vars.control.input.commandMode }).fillY()
         }

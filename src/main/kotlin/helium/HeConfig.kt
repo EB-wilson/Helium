@@ -63,6 +63,7 @@ class HeConfig(configDir: Fi, internalSource: Fi) {
   @ConfigItem var entityInfoAlpha = 1f
 
   @ConfigItem var enableBetterPlacement = true
+  @ConfigItem var useFixedHoveringInfoPane = true
   @ConfigItem var blockColumns = 5
     set(value){ field = value; He.placement.rebuildCategory() }
   @ConfigItem var switchFastPageHotKey = KeyCode.tab

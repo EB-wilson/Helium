@@ -25,6 +25,7 @@ import helium.ui.dialogs.modpacker.ModPackerDialog
 import helium.ui.fragments.entityinfo.EntityInfoFrag
 import helium.ui.fragments.entityinfo.displays.*
 import helium.ui.fragments.placement.HePlacementFrag
+import helium.ui.fragments.placement.HoveringInfoFrag
 import mindustry.Vars
 import mindustry.game.EventType
 import mindustry.gen.Icon
@@ -77,6 +78,7 @@ object He {
   lateinit var heShield: ShieldRenderer
 
   lateinit var placement: HePlacementFrag
+  lateinit var hoveringInfo: HoveringInfoFrag
   lateinit var entityInfo: EntityInfoFrag
   lateinit var unitHealthBarDisplay: UnitHealthDisplayProv
   lateinit var buildHealthBarDisplay: BuildHealthDisplayProv
@@ -122,6 +124,8 @@ object He {
     setupTools(placement)
     placement.cleanGlobal()
 
+    hoveringInfo = HoveringInfoFrag()
+
     entityInfo = EntityInfoFrag()
     setupDisplays(entityInfo)
 
@@ -153,6 +157,7 @@ object He {
 
   private fun postHandle() {
     placement.build(Vars.ui.hudGroup)
+    hoveringInfo.build(Vars.ui.hudGroup)
     entityInfo.build(Vars.ui.hudGroup)
   }
 
@@ -344,6 +349,10 @@ object He {
       ConfigCheck(
         "enableBetterPlacement",
         config::enableBetterPlacement
+      ),
+      ConfigCheck(
+        "useFixedHoveringInfoPane",
+        config::useFixedHoveringInfoPane
       ),
       ConfigSlider(
         "blockColumns",

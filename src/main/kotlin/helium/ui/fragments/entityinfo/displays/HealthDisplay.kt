@@ -6,7 +6,9 @@ import arc.graphics.g2d.Draw
 import arc.graphics.g2d.Font
 import arc.graphics.g2d.FontCache
 import arc.graphics.g2d.GlyphLayout
+import arc.math.Interp
 import arc.math.Mathf
+import arc.scene.ui.Tooltip
 import arc.scene.ui.layout.Scl
 import arc.scene.ui.layout.Table
 import arc.util.Align
@@ -15,10 +17,13 @@ import arc.util.Tmp.c1
 import helium.He
 import helium.graphics.ClipDrawable
 import helium.ui.HeAssets
+import helium.ui.elements.HeCollapser
 import helium.ui.fragments.entityinfo.DisplayProvider
 import helium.ui.fragments.entityinfo.EntityInfoDisplay
 import helium.ui.fragments.entityinfo.Side
 import helium.ui.fragments.entityinfo.TargetGroup
+import helium.util.enterSt
+import helium.util.exitSt
 import helium.util.runInst
 import mindustry.Vars
 import mindustry.core.UI
@@ -68,9 +73,15 @@ abstract class BaseHealthDisplayProv: DisplayProvider<Healthc, BaseHealthDisplay
   lateinit var style: HealthBarStyle
   override fun enabled() = He.config.enableHealthBarDisplay
   override fun buildConfig(table: Table) {
-    table.image(Icon.add).size(64f).scaling(Scaling.fit)
+    table.image(Icon.add).size(80f).scaling(Scaling.fit)
     table.row()
-    table.add(Core.bundle["infos.healthDisplay"], Styles.outlineLabel)
+    table.add(HeCollapser(collX = false, collY = true, collapsed = true){
+      it.add(Core.bundle["infos.healthDisplay"], Styles.outlineLabel)
+    }.also { col ->
+      col.setDuration(0.35f, Interp.pow2Out)
+      table.parent.enterSt { col.setCollapsed(false) }
+      table.parent.exitSt { col.setCollapsed(true) }
+    })
   }
 }
 

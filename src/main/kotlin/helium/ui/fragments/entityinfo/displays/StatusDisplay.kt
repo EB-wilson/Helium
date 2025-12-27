@@ -3,6 +3,7 @@ package helium.ui.fragments.entityinfo.displays
 import arc.Core
 import arc.graphics.Color
 import arc.graphics.g2d.Draw
+import arc.math.Interp
 import arc.math.Mathf
 import arc.scene.ui.layout.Scl
 import arc.scene.ui.layout.Table
@@ -11,10 +12,13 @@ import arc.util.Align
 import arc.util.Scaling
 import arc.util.Tmp
 import helium.He
+import helium.ui.elements.HeCollapser
 import helium.ui.fragments.entityinfo.DisplayProvider
 import helium.ui.fragments.entityinfo.EntityInfoDisplay
 import helium.ui.fragments.entityinfo.Side
 import helium.ui.fragments.entityinfo.TargetGroup
+import helium.util.enterSt
+import helium.util.exitSt
 import mindustry.Vars
 import mindustry.gen.Icon
 import mindustry.gen.Posc
@@ -42,9 +46,15 @@ class StatusDisplayProvider: DisplayProvider<Statusc, StatusDisplay>(){
   }
 
   override fun buildConfig(table: Table) {
-    table.image(Icon.layers).size(64f).scaling(Scaling.fit)
+    table.image(Icon.layers).size(80f).scaling(Scaling.fit)
     table.row()
-    table.add(Core.bundle["infos.statusDisplay"], Styles.outlineLabel)
+    table.add(HeCollapser(collX = false, collY = true, collapsed = true){
+      it.add(Core.bundle["infos.statusDisplay"], Styles.outlineLabel)
+    }.also { col ->
+      col.setDuration(0.35f, Interp.pow2Out)
+      table.parent.enterSt { col.setCollapsed(false) }
+      table.parent.exitSt { col.setCollapsed(true) }
+    })
   }
 }
 
