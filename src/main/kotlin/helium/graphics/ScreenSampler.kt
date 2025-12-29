@@ -29,10 +29,61 @@ object ScreenSampler {
   private var currBuffer: FrameBuffer? = null
   private var activity = false
 
+  /**设置采样阶段标记，请在你的mod主类型的构造函数中调用此方法
+   *
+   * 示例：
+   * ```
+   * class YourMod: Mod(){
+   *   ...
+   *   init{
+   *     ScreenSampler.resetMark()
+   *   }
+   *   ...
+   * }
+   * ```
+   *
+   * java示例：
+   * ```
+   * public class YourMod extends Mod{
+   *   ...
+   *   public Mod(){
+   *     ScreenSampler.resetMark()
+   *   }
+   *   ...
+   * }
+   * ```
+   * */
+  @JvmStatic
   fun resetMark() {
     Core.settings.remove("sampler.setup")
   }
 
+  /**初始化采样阶段标记，请在你的mod主类型中的初始化阶段调用此方法
+   *
+   * 示例：
+   * ```
+   * class YourMod: Mod(){
+   *   ...
+   *   override fun init(){
+   *     ScreenSampler.setup()
+   *   }
+   *   ...
+   * }
+   * ```
+   *
+   * java示例：
+   * ```
+   * public class YourMod extends Mod{
+   *   ...
+   *   @Override
+   *   public void init(){
+   *     ScreenSampler.setup()
+   *   }
+   *   ...
+   * }
+   * ```
+   * */
+  @JvmStatic
   fun setup() {
     if (activity) throw RuntimeException("forbid setup sampler twice")
 
@@ -122,6 +173,7 @@ object ScreenSampler {
   /**将当前的屏幕纹理使用传入的着色器绘制到屏幕上
    * @param unit 屏幕采样纹理绑定的纹理单元
    */
+  @JvmStatic
   fun blit(shader: Shader, unit: Int = 0) {
     checkNotNull(currBuffer) { "currently no buffer bound" }
 
@@ -152,6 +204,7 @@ object ScreenSampler {
    * @param target 用于转存屏幕纹理的目标缓冲区
    * @param clear 在转存之前是否清空帧缓冲区
    */
+  @JvmStatic
   fun getToBuffer(target: FrameBuffer, clear: Boolean) {
     checkNotNull(currBuffer) { "currently no buffer bound" }
 

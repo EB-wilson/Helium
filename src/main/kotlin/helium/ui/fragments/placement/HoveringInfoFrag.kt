@@ -1,6 +1,7 @@
 package helium.ui.fragments.placement
 
 import arc.Core
+import arc.graphics.Color
 import arc.math.Interp
 import arc.scene.Group
 import arc.scene.ui.layout.Table
@@ -11,15 +12,17 @@ import mindustry.content.Blocks
 import mindustry.entities.Units
 import mindustry.game.Team
 import mindustry.gen.Building
+import mindustry.gen.Posc
 import mindustry.gen.Tex
+import mindustry.gen.Unit
 import mindustry.ui.Displayable
-import sun.nio.cs.ISO_8859_5
-import java.io.BufferedWriter
-import java.io.FileWriter
-import java.nio.charset.StandardCharsets
+import mindustry.world.Block
+import mindustry.world.Tile
+import kotlin.math.roundToInt
 
 class HoveringInfoFrag {
   private var hovering: Displayable? = null
+  private var flowingBuild: Building? = null
   private var nextFlowBuild: Building? = null
 
   private var lastHover: Displayable? = null
@@ -52,8 +55,20 @@ class HoveringInfoFrag {
     infoTab.table(Tex.buttonEdge3) { top ->
       topTable = top
       top.add(Table()).growX().update { topTable ->
-
         val hovered: Displayable? = hovering
+        if (hovered != null && hovered is Building && nextFlowBuild != null && nextFlowBuild != flowingBuild) {
+          flowingBuild?.also {
+            it.flowItems()?.stopFlow()
+            it.liquids?.stopFlow()
+          }
+          nextFlowBuild = flowingBuild
+        }
+
+        nextFlowBuild?.also {
+          it.flowItems()?.updateFlow()
+          it.liquids?.updateFlow()
+        }
+
         if (hovered == null || (hovered == lastHover && lastTeam == Vars.player.team())) return@update
 
         lastHover = hovered
@@ -62,6 +77,34 @@ class HoveringInfoFrag {
         topTable.clear()
         topTable.top().left().margin(5f)
         hovered.display(topTable)
+
+        topTable.defaults().left().growX()
+        when (hovered) {
+          is Unit -> {
+            topTable.row()
+            topTable.add("\uF029 ${hovered.type.name}").color(Color.lightGray)
+          }
+          is Building -> {
+            topTable.row()
+            topTable.add("\uF029 ${hovered.block.name}").color(Color.lightGray)
+          }
+          is Tile -> {
+            topTable.row()
+            val toDisplay: Block = hovered.run {
+              if (block().itemDrop != null) block()
+              else if (overlay().itemDrop != null || wallDrop() != null) overlay()
+              else floor()
+            }
+            topTable.add("\uF029 ${toDisplay.name}").color(Color.lightGray)
+          }
+        }
+
+        if (hovered is Posc) {
+          topTable.row()
+          topTable.add("", 0.8f)
+            .update { it.setText("(${hovered.x().roundToInt()}, ${hovered.y().roundToInt()})") }
+            .color(Color.gray)
+        }
       }
     }
   }
@@ -77,7 +120,7 @@ class HoveringInfoFrag {
 
     //if the mouse intersects the table or the UI has the mouse, no hovering can occur
     if (Core.scene.hasMouse(Core.input.mouseX().toFloat(), Core.input.mouseY().toFloat())
-    || (v.x < infoPane.width && v.y < infoPane.height))
+    || (v.x < infoPane.prefWidth && v.y < infoPane.prefHeight))
       return null
 
     //check for a unit

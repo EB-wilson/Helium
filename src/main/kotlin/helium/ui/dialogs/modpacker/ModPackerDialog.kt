@@ -19,15 +19,17 @@ import arc.scene.ui.layout.Scl
 import arc.scene.ui.layout.Table
 import arc.util.Align
 import arc.util.Scaling
-import arc.util.Time
 import helium.addEventBlocker
 import helium.ui.HeAssets
 import helium.ui.UIUtils
 import helium.ui.UIUtils.line
+import helium.ui.dialogs.ModsDialogHelper.buildDescSelector
+import helium.ui.dialogs.ModsDialogHelper.buildErrorIcons
+import helium.ui.dialogs.ModsDialogHelper.buildLinkButton
+import helium.ui.dialogs.ModsDialogHelper.buildModAttrIcons
+import helium.ui.dialogs.ModsDialogHelper.buildModAttrList
+import helium.ui.dialogs.ModsDialogHelper.setupContentsList
 import helium.ui.dialogs.Name
-import helium.ui.dialogs.addTip
-import helium.ui.dialogs.getModList
-import helium.ui.dialogs.switchBut
 import helium.ui.elements.HeCollapser
 import helium.util.ModStat
 import helium.util.ModStat.isValid
@@ -779,19 +781,7 @@ class ModPackerDialog: BaseDialog(Core.bundle["dialog.modPacker.title"]) {
 
             buildModAttrIcons(status, stat)
 
-            ModStat.apply {
-              if (stat.isLibMissing()) status.image(Icon.layersSmall).scaling(Scaling.fit).color(Color.crimson)
-                .addTip(Core.bundle["dialog.mods.libMissing"])
-              else if (stat.isLibIncomplete()) status.image(Icon.warningSmall).scaling(Scaling.fit).color(Color.crimson)
-                .addTip(Core.bundle["dialog.mods.libIncomplete"])
-              else if (stat.isLibCircleDepending()) status.image(Icon.refresh).scaling(Scaling.fit).color(Color.crimson)
-                .addTip(Core.bundle["dialog.mods.libCircleDepending"])
-
-              if (stat.isError()) status.image(Icon.cancelSmall).scaling(Scaling.fit).color(Color.crimson)
-                .addTip(Core.bundle["dialog.mods.error"])
-              if (stat.isBlackListed()) status.image(Icon.infoCircle).scaling(Scaling.fit).color(Color.crimson)
-                .addTip(Core.bundle["dialog.mods.blackListed"])
-            }
+            buildErrorIcons(status, stat)
           }.fill().pad(4f)
 
           over.table { side ->
@@ -825,32 +815,7 @@ class ModPackerDialog: BaseDialog(Core.bundle["dialog.modPacker.title"]) {
           .growX().padRight(50f).wrap().color(Pal.accent).labelAlign(Align.left)
         details.row()
         details.table { link ->
-          link.left().image(Icon.githubSmall).scaling(Scaling.fit).size(24f).color(Color.lightGray)
-          val linkButton = link.button("...", Styles.nonet) {}
-            .padLeft(4f).padRight(50f).wrapLabel(true)
-            .growX().left().align(Align.left).height(30f).disabled(true).get()
-
-          linkButton.label.setAlignment(Align.left)
-          linkButton.label.setFontScale(0.9f)
-          getModList(
-            errHandler = {
-              linkButton.isDisabled = true
-              linkButton.setText(Core.bundle["dialog.mods.checkFailed"])
-            }
-          ) { modList ->
-            val modInfo = modList[Name(mod.author, mod.name)]
-
-            if (modInfo == null) {
-              linkButton.isDisabled = true
-              linkButton.setText(Core.bundle["dialog.mods.noGithubRepo"])
-            }
-            else {
-              val url = "https://github.com/${modInfo.repo}"
-              linkButton.isDisabled = false
-              linkButton.setText(url)
-              linkButton.clicked { Core.app.openURI(url) }
-            }
-          }
+          buildLinkButton(link, Name(mod.author, mod.name))
         }
         details.row()
         details.table{ status ->
@@ -872,7 +837,7 @@ class ModPackerDialog: BaseDialog(Core.bundle["dialog.modPacker.title"]) {
 
           ModStat.apply {
             if (stat.isLibMissing()) {
-              helium.ui.dialogs.buildStatus(
+              buildStatus(
                 status,
                 Icon.layersSmall,
                 Core.bundle["dialog.mods.libMissing"],
@@ -880,7 +845,7 @@ class ModPackerDialog: BaseDialog(Core.bundle["dialog.modPacker.title"]) {
               )
             }
             else if (stat.isLibIncomplete()) {
-              helium.ui.dialogs.buildStatus(
+              buildStatus(
                 status,
                 Icon.warningSmall,
                 Core.bundle["dialog.mods.libIncomplete"],
@@ -888,7 +853,7 @@ class ModPackerDialog: BaseDialog(Core.bundle["dialog.modPacker.title"]) {
               )
             }
             else if (stat.isLibCircleDepending()) {
-              helium.ui.dialogs.buildStatus(
+              buildStatus(
                 status,
                 Icon.rotateSmall,
                 Core.bundle["dialog.mods.libCircleDepending"],
@@ -897,10 +862,10 @@ class ModPackerDialog: BaseDialog(Core.bundle["dialog.modPacker.title"]) {
             }
 
             if (stat.isError()) {
-              helium.ui.dialogs.buildStatus(status, Icon.cancelSmall, Core.bundle["dialog.mods.error"], Color.crimson)
+              buildStatus(status, Icon.cancelSmall, Core.bundle["dialog.mods.error"], Color.crimson)
             }
             if (stat.isBlackListed()) {
-              helium.ui.dialogs.buildStatus(
+              buildStatus(
                 status,
                 Icon.infoCircleSmall,
                 Core.bundle["dialog.mods.blackListed"],
@@ -919,17 +884,7 @@ class ModPackerDialog: BaseDialog(Core.bundle["dialog.modPacker.title"]) {
           .filter { c -> mod.name == c.minfo.mod?.name && !c.isHidden }
 
         var current = -1
-        details.table { switch ->
-          switch.left().defaults().center()
-          switch.button({ it.add(Core.bundle["dialog.mods.description"], 0.85f) }, switchBut) { setupContent(0) }
-            .margin(12f).checked { current == 0 }.disabled { t -> t.isChecked }
-          switch.button({ it.add(Core.bundle["dialog.mods.rawText"], 0.85f) }, switchBut) { setupContent(1) }
-            .margin(12f).checked { current == 1 }.disabled { t -> t.isChecked }
-          if (contents.any()) {
-            switch.button({ it.add(Core.bundle["dialog.mods.contents"], 0.85f) }, switchBut) { setupContent(2) }
-              .margin(12f).checked { current == 2 }.disabled { t -> t.isChecked }
-          }
-        }.grow().padBottom(0f)
+        buildDescSelector(details, { current }, setupContent, contents)
         details.row()
         details.table(HeAssets.grayUI) { desc ->
           desc.defaults().grow()
@@ -942,26 +897,7 @@ class ModPackerDialog: BaseDialog(Core.bundle["dialog.modPacker.title"]) {
             when (i) {
               0 -> desc.add(Markdown(mod.description ?: "", MarkdownStyles.defaultMD))
               1 -> desc.add(mod.description ?: "").wrap()
-              2 -> {
-                Core.app.post {
-                  val n = (desc.width/Scl.scl(50f)).toInt()
-                  contents.forEachIndexed { i, c ->
-                    if (i > 0 && i%n == 0) desc.row()
-
-                    desc.button(TextureRegionDrawable(c.uiIcon), Styles.flati, Vars.iconMed) {
-                      Vars.ui.content.show(c)
-                    }.size(50f).with { im ->
-                      val click = im.clickListener
-                      im.update {
-                        im.image.color.lerp(
-                          if (!click.isOver) Color.lightGray else Color.white,
-                          0.4f*Time.delta
-                        )
-                      }
-                    }.tooltip(c.localizedName)
-                  }
-                }
-              }
+              2 -> setupContentsList(desc, contents)
             }
           }
         }.grow().margin(12f).padTop(0f)
@@ -971,56 +907,9 @@ class ModPackerDialog: BaseDialog(Core.bundle["dialog.modPacker.title"]) {
     return res
   }
 
-  private fun buildModAttrIcons(status: Table, stat: Int) {
-    ModStat.apply {
-      if (stat.isJAR()) status.image(HeAssets.java).scaling(Scaling.fit).color(Pal.reactorPurple)
-        .addTip(Core.bundle["dialog.mods.jarMod"])
-      if (stat.isJS()) status.image(HeAssets.javascript).scaling(Scaling.fit).color(Pal.accent)
-        .addTip(Core.bundle["dialog.mods.jsMod"])
-      if (!stat.isClientOnly()) status.image(Icon.hostSmall).scaling(Scaling.fit).color(Pal.techBlue)
-        .addTip(Core.bundle["dialog.mods.hostMod"])
-
-      if (stat.isDeprecated()) status.image(Icon.warningSmall).scaling(Scaling.fit).color(Color.crimson)
-        .addTip(
-          Core.bundle.format(
-            "dialog.mods.deprecated",
-            if (stat.isJAR()) Vars.minJavaModGameVersion else Vars.minModGameVersion
-          )
-        )
-      else if (stat.isUnsupported()) status.image(Icon.warningSmall).scaling(Scaling.fit).color(Color.crimson)
-        .addTip(Core.bundle["dialog.mods.unsupported"])
-    }
-  }
-
   fun buildStatus(status: Table, icon: Drawable, information: String, color: Color) {
     status.image(icon).scaling(Scaling.fit).color(color).size(26f).pad(4f)
     status.add(information, 0.85f).color(color)
     status.row()
-  }
-
-  private fun buildModAttrList(status: Table, stat: Int) {
-    ModStat.apply {
-      if (stat.isJAR()) {
-        buildStatus(status, HeAssets.java, Core.bundle["dialog.mods.jarMod"], Pal.reactorPurple)
-      }
-      if (stat.isJS()) {
-        buildStatus(status, HeAssets.javascript, Core.bundle["dialog.mods.jsMod"], Pal.accent)
-      }
-      if (!stat.isClientOnly()) {
-        buildStatus(status, Icon.hostSmall, Core.bundle["dialog.mods.hostMod"], Pal.techBlue)
-      }
-
-      if (stat.isDeprecated()) {
-        buildStatus(
-          status, Icon.warningSmall, Core.bundle.format(
-            "dialog.mods.deprecated",
-            if (stat.isJAR()) Vars.minJavaModGameVersion else Vars.minModGameVersion
-          ), Color.crimson
-        )
-      }
-      else if (stat.isUnsupported()) {
-        buildStatus(status, Icon.warningSmall, Core.bundle["dialog.mods.unsupported"], Color.crimson)
-      }
-    }
   }
 }

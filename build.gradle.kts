@@ -66,6 +66,9 @@ dependencies {
   implementation("com.github.EB-wilson.UniverseCore:markdown:2.3.1")
 
   implementation(kotlin("stdlib-jdk8"))
+
+  testImplementation("com.github.Anuken.Arc:arc-core:${arcVersion}")
+  testImplementation("com.github.Anuken.Mindustry:core:${mindustryVersion}")
 }
 
 tasks {

@@ -112,7 +112,7 @@ class HePlacementFrag {
   private var invAnimateProgress = 0f
 
   init {
-    Events.on(WorldLoadEvent::class.java) { event ->
+    Events.on(WorldLoadEvent::class.java) {
       Core.app.post {
         currentCategory = Category.distribution
         currBlock = null
@@ -194,14 +194,15 @@ class HePlacementFrag {
       topLevel = toggler
 
       val old = Vars.ui.hudfrag.blockfrag.togglerRef
+      val vis = Boolp{ !config.enableBetterPlacement && Vars.ui.hudfrag.shown }
+
       val ind = parent.children.indexOf(old)
       toggler.zIndex = ind + 1
 
       toggler.update {
-        val old = Vars.ui.hudfrag.blockfrag.togglerRef
-        old.visible = !config.enableBetterPlacement
-
         update()
+        val old = Vars.ui.hudfrag.blockfrag.togglerRef
+        old.visibility = vis
       }
       toggler.bottom().right().visible { config.enableBetterPlacement && Vars.ui.hudfrag.shown }
 
@@ -986,6 +987,7 @@ class HePlacementFrag {
     private fun slotName(): String? {
       return if (!Vars.net.active() || Vars.net.server()) {
         if (Vars.state.isCampaign) Vars.state.planet?.let { "planet#${"${it.name}"}}" } ?: "#unknow"
+        else if (Vars.control.saves.current == null) null // no slot, unsave
         else {
           "save#${Vars.control.saves.current.file.nameWithoutExtension().replace("-", "_")}"
         }

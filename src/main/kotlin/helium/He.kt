@@ -116,6 +116,8 @@ object He {
     heShield = ShieldRenderer()
     //heShield.setup()
 
+    //GithubAPI.init()
+
     HeAssets.load()
     HeShaders.load()
     HeStyles.load()
@@ -162,16 +164,18 @@ object He {
   }
 
   private fun setupHeModsDialog(heModsDialog: HeModsDialog) {
-    Vars.ui.mods.also {
-      it.style = Dialog.DialogStyle().also { s ->
-        s.background = Styles.none
-        s.titleFont = Fonts.def
-      }
-      it.clear()
-      it.shown {
-        Core.app.post {
-          it.hide(null)
-          heModsDialog.show()
+    if (config.enableBetterModsDialog) {
+      Vars.ui.mods.also {
+        it.style = Dialog.DialogStyle().also { s ->
+          s.background = Styles.none
+          s.titleFont = Fonts.def
+        }
+        it.clear()
+        it.shown {
+          Core.app.post {
+            it.hide(null)
+            heModsDialog.show()
+          }
         }
       }
     }
