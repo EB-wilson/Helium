@@ -14,8 +14,7 @@ object GithubAPI {
   private var githubUser: GithubUser? = null
 
   fun init(){
-    val token = "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"//He.global.getString("github-token")
-
+    val token = He.global.getString("github-token")
     if (token.isNullOrBlank()) return
 
     loginUser(token){
