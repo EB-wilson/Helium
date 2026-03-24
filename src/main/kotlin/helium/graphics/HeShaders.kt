@@ -2,9 +2,12 @@ package helium.graphics
 
 import arc.Core
 import arc.files.Fi
+import arc.graphics.g2d.Font
 import arc.graphics.gl.Shader
 import helium.Helium.Companion.getInternalFile
 import helium.graphics.g2d.EntityRangeExtractor
+import mindustry.ui.Fonts
+import universecore.ui.elements.markdown.MarkdownStyles
 
 object HeShaders {
   lateinit var entityRangeRenderer: EntityRangeExtractor

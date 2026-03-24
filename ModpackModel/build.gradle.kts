@@ -72,18 +72,28 @@ tasks {
           ?.sorted()
           ?.reversed()
           ?.find { f -> File (f, "android.jar").exists() }
+          ?.let { f -> File (f, "android.jar") }
 
-        if (platformRoot == null) throw GradleException("No android.jar found. Ensure that you have an Android platform installed.")
+        val d8 = File("$sdkRoot/build-tools/").listFiles()
+          ?.sorted()
+          ?.reversed()
+          ?.find { f -> f.listFiles()?.any{ s -> s.name.contains("d8") }?:false }
+          ?.let { f -> f.listFiles()?.find{ s -> s.name.contains("d8") } }
+
+        if (platformRoot == null)
+          throw GradleException("No android.jar found. Ensure that you have an Android platform installed.")
+        if (d8 == null)
+          throw GradleException("No d8 found. Ensure that you have an Android build-tool installed.")
 
         //collect dependencies needed for desugaring
         val dependencies = (
             configurations.compileClasspath.get().files +
             configurations.runtimeClasspath.get().files +
-            setOf(File(platformRoot, "android.jar"))
+            setOf(platformRoot)
                            ).joinToString(" ") { "--classpath $it" }
 
         //dex and desugar files - this requires d8 in your PATH
-        "d8 $dependencies --min-api 14 --output ${project.name}-android.jar ${project.name}-desktop.jar"
+        "${d8.absolutePath} $dependencies --min-api 14 --output ${project.name}-android.jar ${project.name}-desktop.jar"
           .execute(File("$buildDir/libs"))
       }
       catch (e: Throwable) {
@@ -92,6 +102,7 @@ tasks {
           return@doLast
         }
 
+        println(e.message)
         println("[WARNING] d8 tool or platform tools was not found, if you was installed android SDK, please check your environment variable")
 
         delete(

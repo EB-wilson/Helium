@@ -28,6 +28,8 @@ import helium.ui.dialogs.ModsDialogHelper.buildErrorIcons
 import helium.ui.dialogs.ModsDialogHelper.buildLinkButton
 import helium.ui.dialogs.ModsDialogHelper.buildModAttrIcons
 import helium.ui.dialogs.ModsDialogHelper.buildModAttrList
+import helium.ui.dialogs.ModsDialogHelper.buildModBasicStatus
+import helium.ui.dialogs.ModsDialogHelper.buildModErrList
 import helium.ui.dialogs.ModsDialogHelper.buildStatus
 import helium.ui.dialogs.ModsDialogHelper.getModList
 import helium.ui.dialogs.ModsDialogHelper.setupContentsList
@@ -439,31 +441,9 @@ class HeModsDialog: BaseDialog(Core.bundle["mods"]) {
               ) { stat.isLocalFile() }.fill().colspan(2)
               status.row()
 
-              if (stat.isValid()) {
-                buildStatus(status, Icon.okSmall, Core.bundle["dialog.mods.modStatCorrect"], Pal.heal)
-              }
-              else {
-                buildStatus(status, Icon.cancelSmall, Core.bundle["dialog.mods.modStatError"], Color.crimson)
-              }
-
+              buildModBasicStatus(status, stat)
               buildModAttrList(status, stat)
-
-              if (stat.isLibMissing()) {
-                buildStatus(status, Icon.layersSmall, Core.bundle["dialog.mods.libMissing"], Color.crimson)
-              }
-              else if (stat.isLibIncomplete()) {
-                buildStatus(status, Icon.warningSmall, Core.bundle["dialog.mods.libIncomplete"], Color.crimson)
-              }
-              else if (stat.isLibCircleDepending()) {
-                buildStatus(status, Icon.rotateSmall, Core.bundle["dialog.mods.libCircleDepending"], Color.crimson)
-              }
-
-              if (stat.isError()) {
-                buildStatus(status, Icon.cancelSmall, Core.bundle["dialog.mods.error"], Color.crimson)
-              }
-              if (stat.isBlackListed()) {
-                buildStatus(status, Icon.infoCircleSmall, Core.bundle["dialog.mods.blackListed"], Color.crimson)
-              }
+              buildModErrList(status, stat)
             }
             details.row()
             details.line(Color.gray, true, 4f).pad(6f).padLeft(-6f).padRight(-6f)
@@ -748,4 +728,3 @@ class HeModsDialog: BaseDialog(Core.bundle["mods"]) {
     val latestMod: ModListing?,
   )
 }
-

@@ -152,6 +152,17 @@ object ModsDialogHelper {
     }
   }
 
+  fun buildModBasicStatus(status: Table, stat: Int) {
+    ModStat.apply {
+      if (stat.isValid()) {
+        buildStatus(status, Icon.okSmall, Core.bundle["dialog.mods.modStatCorrect"], Pal.heal)
+      }
+      else {
+        buildStatus(status, Icon.cancelSmall, Core.bundle["dialog.mods.modStatError"], Color.crimson)
+      }
+    }
+  }
+
   fun buildModAttrList(status: Table, stat: Int) {
     ModStat.apply {
       if (stat.isJAR()) {
@@ -163,17 +174,41 @@ object ModsDialogHelper {
       if (!stat.isClientOnly()) {
         buildStatus(status, Icon.hostSmall, Core.bundle["dialog.mods.hostMod"], Pal.techBlue)
       }
+    }
+  }
 
+  fun buildModErrList(status: Table, stat: Int) {
+    ModStat.apply {
       if (stat.isDeprecated()) {
         buildStatus(
-          status, Icon.warningSmall, Core.bundle.format(
+          status,
+          Icon.warningSmall,
+          Core.bundle.format(
             "dialog.mods.deprecated",
             if (stat.isJAR()) Vars.minJavaModGameVersion else Vars.minModGameVersion
-          ), Color.crimson
+          ),
+          Color.crimson
         )
       }
       else if (stat.isUnsupported()) {
         buildStatus(status, Icon.warningSmall, Core.bundle["dialog.mods.unsupported"], Color.crimson)
+      }
+
+      if (stat.isLibMissing()) {
+        buildStatus(status, Icon.layersSmall, Core.bundle["dialog.mods.libMissing"], Color.crimson)
+      }
+      else if (stat.isLibIncomplete()) {
+        buildStatus(status, Icon.warningSmall, Core.bundle["dialog.mods.libIncomplete"], Color.crimson)
+      }
+      else if (stat.isLibCircleDepending()) {
+        buildStatus(status, Icon.rotateSmall, Core.bundle["dialog.mods.libCircleDepending"], Color.crimson)
+      }
+
+      if (stat.isError()) {
+        buildStatus(status, Icon.cancelSmall, Core.bundle["dialog.mods.error"], Color.crimson)
+      }
+      if (stat.isBlackListed()) {
+        buildStatus(status, Icon.infoCircleSmall, Core.bundle["dialog.mods.blackListed"], Color.crimson)
       }
     }
   }
@@ -306,12 +341,72 @@ object ModsDialogHelper {
 
   fun showDownloadModDialog(modInfo: ModListing, callback: Runnable) {
     var progress = 0f
-    var downloading = false
     var complete = false
+    var downloading = false
     var task: Future<*>? = null
 
     val loaded = Vars.mods.getMod(modInfo.internalName)
     val isUpdate = loaded != null && loaded.meta.version != modInfo.version
+
+    fun buildContent(content: Table) {
+      val repoStr = modInfo.repo.replace("/", "_")
+      val iconLink = "https://raw.githubusercontent.com/EB-wilson/HeMindustryMods/master/icons/$repoStr"
+      val image = Downloader.downloadImg(iconLink, Core.atlas.find("nomap"))
+
+      content.table(HeAssets.darkGrayUIAlpha) { cont ->
+        cont.table(Tex.buttonSelect) { icon ->
+          icon.image(image).scaling(Scaling.fit).size(80f)
+        }.pad(10f).margin(4f).size(88f)
+        cont.stack(
+          Table { info ->
+            info.left().top().defaults().left().pad(3f)
+            info.add(modInfo.name).color(Pal.accent)
+            info.row()
+
+            if (loaded != null) {
+              if (loaded.meta.version != modInfo.version) {
+                info.add("[lightgray]${loaded.meta.version}  >>>  [accent]${modInfo.version}")
+              }
+              else {
+                info.add("[lightgray]${loaded.meta.version}  >>>  ${modInfo.version}" + Core.bundle["dialog.mods.reinstall"])
+              }
+            }
+            else info.add(modInfo.version)
+
+            info.row()
+            info.table { b ->
+              b.add(
+                Bar(
+                  {
+                    if (complete) Core.bundle["dialog.mods.downloadComplete"]
+                    else Core.bundle.format(
+                      "dialog.mods.downloading",
+                      if (progress < 0) (-progress).toStoreSize()
+                      else "${Mathf.round(progress*100)}%"
+                    )
+                  },
+                  { Pal.accent },
+                  { if (progress < 0) 1f else progress }
+                )).growX().pad(6f).height(22f).visible { downloading }
+            }.grow()
+          },
+          Table { info ->
+            info.top().right().defaults().right().top()
+            info.table { status ->
+              status.top().right().defaults().size(26f).pad(4f)
+              val stat = modInfo.checkStatus()
+
+              buildModAttrIcons(status, stat)
+            }.fill()
+            info.row()
+            info.table { stars ->
+              stars.bottom().right()
+              buildStars(stars, modInfo)
+            }
+          }
+        ).pad(12f).padLeft(4f).growX().fillY().minWidth(420f)
+      }.margin(6f).growX().fillY()
+    }
 
     UIUtils.showPane(
       Core.bundle[if (isUpdate) "dialog.mods.updateMod" else "dialog.mods.downloadMod"],
@@ -323,15 +418,10 @@ object ModsDialogHelper {
         it.hide()
       },
       ButtonEntry(
-        { Core.bundle[if (complete) "misc.complete" else "misc.download"] },
-        { if (complete) Icon.ok else Icon.download },
-        disabled = { downloading && !complete }
+        Core.bundle["misc.download"],
+        Icon.download,
+        disabled = { downloading }
       ) {
-        if (complete) {
-          it.hide()
-          return@ButtonEntry
-        }
-
         downloading = true
 
         task = exec.submit {
@@ -389,6 +479,15 @@ object ModsDialogHelper {
                     fi.delete()
                     complete = true
                     callback.run()
+
+                    it.hide()
+                    UIUtils.showPane(
+                      Core.bundle[if (isUpdate) "dialog.mods.updateMod" else "dialog.mods.downloadMod"],
+                      ButtonEntry(Core.bundle["confirm"], Icon.ok) { d ->
+                        callback.run()
+                        d.hide()
+                      }
+                    ) { t -> buildContent(t) }
                   } catch (e: Exception) {
                     Log.err(e)
                     UIUtils.showException(e, Core.bundle["dialog.mods.downloadFailed"])
@@ -398,63 +497,7 @@ object ModsDialogHelper {
             }
         }
       }
-    ) { t ->
-      val iconLink =
-        "https://raw.githubusercontent.com/EB-wilson/HeMindustryMods/master/icons/" + modInfo.repo.replace("/", "_")
-      val image = Downloader.downloadImg(iconLink, Core.atlas.find("nomap"))
-
-      t.table(HeAssets.darkGrayUIAlpha) { cont ->
-        cont.table(Tex.buttonSelect) { icon ->
-          icon.image(image).scaling(Scaling.fit).size(80f)
-        }.pad(10f).margin(4f).size(88f)
-        cont.stack(
-          Table { info ->
-            info.left().top().defaults().left().pad(3f)
-            info.add(modInfo.name).color(Pal.accent)
-            info.row()
-            if (loaded != null) {
-              if (loaded.meta.version != modInfo.version) {
-                info.add("[lightgray]${loaded.meta.version}  >>>  [accent]${modInfo.version}")
-              }
-              else {
-                info.add("[lightgray]${loaded.meta.version}  >>>  ${modInfo.version}" + Core.bundle["dialog.mods.reinstall"])
-              }
-            }
-            else info.add(modInfo.version)
-            info.row()
-            info.table { b ->
-              b.add(
-                Bar(
-                  {
-                    if (complete) Core.bundle["dialog.mods.downloadComplete"]
-                    else Core.bundle.format(
-                      "dialog.mods.downloading",
-                      if (progress < 0) (-progress).toStoreSize()
-                      else "${Mathf.round(progress*100)}%"
-                    )
-                  },
-                  { Pal.accent },
-                  { if (progress < 0) 1f else progress }
-                )).growX().pad(6f).height(22f).visible { downloading }
-            }.grow()
-          },
-          Table { info ->
-            info.top().right().defaults().right().top()
-            info.table { status ->
-              status.top().right().defaults().size(26f).pad(4f)
-              val stat = modInfo.checkStatus()
-
-              buildModAttrIcons(status, stat)
-            }.fill()
-            info.row()
-            info.table { stars ->
-              stars.bottom().right()
-              buildStars(stars, modInfo)
-            }
-          }
-        ).pad(12f).padLeft(4f).growX().fillY().minWidth(420f)
-      }.margin(6f).growX().fillY()
-    }
+    ) { t -> buildContent(t) }
   }
 }
 

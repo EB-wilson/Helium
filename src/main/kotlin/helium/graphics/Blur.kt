@@ -168,9 +168,6 @@ class Blur(vararg convolutions: Float = DEf_F) {
       .replace("%varying%", varyings.toString())
       .replace("%convolution%", convolution.toString())
 
-    Log.info(vertexShader)
-    Log.info(fragmentShader)
-
     return Shader(vertexShader, fragmentShader)
   }
 

@@ -12,6 +12,7 @@ import arc.graphics.gl.GLFrameBuffer
 import arc.graphics.gl.Shader
 import arc.util.serialization.Jval
 import helium.util.accessField
+import helium.util.mto
 import mindustry.Vars
 import mindustry.game.EventType
 import mindustry.graphics.Layer
@@ -211,13 +212,18 @@ object ScreenSampler {
     if (clear) target.begin(Color.clear)
     else target.begin()
 
-    Gl.bindFramebuffer(GL30.GL_READ_FRAMEBUFFER, currBuffer!!.framebufferHandle)
-    Gl.bindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, target.framebufferHandle)
-    Core.gl30.glBlitFramebuffer(
-      0, 0, currBuffer!!.width, currBuffer!!.height,
-      0, 0, target.width, target.height,
-      Gl.colorBufferBit, Gl.nearest
-    )
+    if (Core.gl30 == null) {
+      currBuffer!!.blit(HeShaders.baseScreen)
+    }
+    else {
+      Gl.bindFramebuffer(GL30.GL_READ_FRAMEBUFFER, currBuffer!!.framebufferHandle)
+      Gl.bindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, target.framebufferHandle)
+      Core.gl30.glBlitFramebuffer(
+        0, 0, currBuffer!!.width, currBuffer!!.height,
+        0, 0, target.width, target.height,
+        Gl.colorBufferBit, Gl.nearest
+      )
+    }
 
     target.end()
   }

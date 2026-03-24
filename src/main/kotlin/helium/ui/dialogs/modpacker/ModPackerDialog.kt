@@ -28,11 +28,11 @@ import helium.ui.dialogs.ModsDialogHelper.buildErrorIcons
 import helium.ui.dialogs.ModsDialogHelper.buildLinkButton
 import helium.ui.dialogs.ModsDialogHelper.buildModAttrIcons
 import helium.ui.dialogs.ModsDialogHelper.buildModAttrList
+import helium.ui.dialogs.ModsDialogHelper.buildModBasicStatus
+import helium.ui.dialogs.ModsDialogHelper.buildModErrList
 import helium.ui.dialogs.ModsDialogHelper.setupContentsList
 import helium.ui.dialogs.Name
 import helium.ui.elements.HeCollapser
-import helium.util.ModStat
-import helium.util.ModStat.isValid
 import helium.util.accessField
 import mindustry.Vars
 import mindustry.content.Planets
@@ -294,9 +294,7 @@ class ModPackerDialog: BaseDialog(Core.bundle["dialog.modPacker.title"]) {
         val scenW = cont.width
         val scenH = cont.height
 
-        if (Core.graphics.isPortrait){
-          optionsTab.pack()
-          optionsTab.width = max(scenW, optionsTab.width)
+        fun setupTab() {
           optionsTab.height = scenH
           optionsTab.x = -optionsTab.width
           optionsTab.update {
@@ -305,6 +303,14 @@ class ModPackerDialog: BaseDialog(Core.bundle["dialog.modPacker.title"]) {
           }
 
           fileEntriesTab.pack()
+        }
+
+        if (Core.graphics.isPortrait){
+          optionsTab.pack()
+          optionsTab.width = max(scenW, optionsTab.width)
+
+          setupTab()
+
           fileEntriesTab.width = scenW
           fileEntriesTab.height = scenH
           fileEntriesTab.x = scenW
@@ -316,14 +322,9 @@ class ModPackerDialog: BaseDialog(Core.bundle["dialog.modPacker.title"]) {
         else {
           optionsTab.pack()
           optionsTab.width = max(scenW/4f, optionsTab.width)
-          optionsTab.height = scenH
-          optionsTab.x = -optionsTab.width
-          optionsTab.update {
-            val toX = if (optionShow) 0f else -optionsTab.width
-            optionsTab.x = Mathf.lerpDelta(optionsTab.x, toX, 0.2f)
-          }
 
-          fileEntriesTab.pack()
+          setupTab()
+
           fileEntriesTab.width = scenW/4f
           fileEntriesTab.height = scenH
           fileEntriesTab.x = scenW
@@ -412,7 +413,7 @@ class ModPackerDialog: BaseDialog(Core.bundle["dialog.modPacker.title"]) {
       it.add().growX()
       it.button(Icon.cancel, Styles.clearNonei, 32f){
         optionShow = false
-      }.margin(6f)
+      }.margin(6f).visible { Core.graphics.isPortrait }
     }.color(Pal.gray).pad(0f)
     options.row()
     options.line(Pal.darkerGray, true, 4f).pad(0f).padBottom(4f)
@@ -556,7 +557,7 @@ class ModPackerDialog: BaseDialog(Core.bundle["dialog.modPacker.title"]) {
       it.add().growX()
       it.button(Icon.cancel, Styles.clearNonei, 32f){
         filesShow = false
-      }.margin(6f)
+      }.margin(6f).visible { Core.graphics.isPortrait }
     }.color(Pal.gray).pad(0f)
     file.row()
     file.line(Pal.darkerGray, true, 3f).pad(0f).padBottom(4f)
@@ -757,7 +758,7 @@ class ModPackerDialog: BaseDialog(Core.bundle["dialog.modPacker.title"]) {
     val res = Table()
     val stat = mod.stat
     var coll: HeCollapser? = null
-    var setupContent = { i: Int -> }
+    var setupContent = { _: Int -> }
 
     res.button({ top ->
       top.table(Tex.buttonSelect) { icon ->
@@ -821,58 +822,9 @@ class ModPackerDialog: BaseDialog(Core.bundle["dialog.modPacker.title"]) {
         details.table{ status ->
           status.left().defaults().left()
 
-          if (stat.isValid()) {
-            buildStatus(status, Icon.okSmall, Core.bundle["dialog.mods.modStatCorrect"], Pal.heal)
-          }
-          else {
-            buildStatus(
-              status,
-              Icon.cancelSmall,
-              Core.bundle["dialog.mods.modStatError"],
-              Color.crimson
-            )
-          }
-
+          buildModBasicStatus(status, stat)
           buildModAttrList(status, stat)
-
-          ModStat.apply {
-            if (stat.isLibMissing()) {
-              buildStatus(
-                status,
-                Icon.layersSmall,
-                Core.bundle["dialog.mods.libMissing"],
-                Color.crimson
-              )
-            }
-            else if (stat.isLibIncomplete()) {
-              buildStatus(
-                status,
-                Icon.warningSmall,
-                Core.bundle["dialog.mods.libIncomplete"],
-                Color.crimson
-              )
-            }
-            else if (stat.isLibCircleDepending()) {
-              buildStatus(
-                status,
-                Icon.rotateSmall,
-                Core.bundle["dialog.mods.libCircleDepending"],
-                Color.crimson
-              )
-            }
-
-            if (stat.isError()) {
-              buildStatus(status, Icon.cancelSmall, Core.bundle["dialog.mods.error"], Color.crimson)
-            }
-            if (stat.isBlackListed()) {
-              buildStatus(
-                status,
-                Icon.infoCircleSmall,
-                Core.bundle["dialog.mods.blackListed"],
-                Color.crimson
-              )
-            }
-          }
+          buildModErrList(status, stat)
         }
         details.row()
         details.line(Color.gray, true, 4f).pad(6f).padLeft(-6f).padRight(-6f)
