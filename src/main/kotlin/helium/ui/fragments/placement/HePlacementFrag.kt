@@ -32,7 +32,6 @@ import helium.ui.HeAssets
 import helium.ui.UIUtils.line
 import helium.ui.elements.HeCollapser
 import helium.util.HeKeyBindings
-import helium.util.accessField
 import helium.util.ifInst
 import mindustry.Vars
 import mindustry.ai.UnitCommand
@@ -55,6 +54,7 @@ import mindustry.ui.fragments.PlacementFragment
 import mindustry.world.Block
 import mindustry.world.blocks.ConstructBlock.ConstructBuild
 import mindustry.world.meta.StatValues
+import universe.util.reflect.Reflection.accessField
 import kotlin.math.roundToInt
 
 class HePlacementFrag {

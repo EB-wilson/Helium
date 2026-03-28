@@ -7,7 +7,6 @@ import arc.scene.Element
 import arc.scene.ui.layout.Table
 import arc.struct.IntMap
 import arc.struct.Seq
-import helium.util.accessField
 import mindustry.Vars
 import mindustry.async.PhysicsProcess
 import mindustry.entities.EntityGroup
@@ -15,6 +14,7 @@ import mindustry.entities.EntityIndexer
 import mindustry.game.Team
 import mindustry.gen.*
 import mindustry.gen.Unit
+import universe.util.reflect.Reflection.accessField
 import java.lang.reflect.Field
 
 abstract class DisplayProvider<E, T: EntityInfoDisplay<E>>{

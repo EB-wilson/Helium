@@ -42,7 +42,6 @@ import helium.ui.elements.roulette.StripWrap
 import helium.ui.fragments.entityinfo.Side.*
 import helium.util.IndexedSerial
 import helium.util.SerialObject
-import helium.util.accessField
 import helium.util.enterSt
 import helium.util.exitSt
 import helium.util.poolObtain
@@ -58,6 +57,7 @@ import mindustry.graphics.Pal
 import mindustry.input.Binding
 import mindustry.ui.Fonts
 import mindustry.ui.Styles
+import universe.util.reflect.Reflection.accessField
 import java.util.*
 import kotlin.math.abs
 import kotlin.math.max

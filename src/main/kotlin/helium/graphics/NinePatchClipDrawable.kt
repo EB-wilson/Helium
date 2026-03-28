@@ -4,11 +4,9 @@ import arc.graphics.Color
 import arc.graphics.g2d.Draw
 import arc.graphics.g2d.NinePatch
 import arc.math.Mathf
-import arc.scene.Scene
 import arc.scene.style.NinePatchDrawable
-import arc.scene.ui.Dialog
-import helium.util.accessField
-import helium.util.accessInt
+import universe.util.reflect.Reflection.accessField
+import universe.util.reflect.Reflection.accessInt
 
 @Suppress("LeakingThis")
 open class NinePatchClipDrawable: BaseClipDrawable {

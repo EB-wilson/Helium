@@ -44,8 +44,8 @@ import mindustry.gen.Tex
 import mindustry.graphics.Pal
 import mindustry.ui.Styles
 import mindustry.ui.dialogs.BaseDialog
-import universecore.ui.elements.markdown.Markdown
-import universecore.ui.elements.markdown.MarkdownStyles
+import universe.ui.markdown.Markdown
+import universe.ui.markdown.MarkdownStyles
 import kotlin.math.max
 import kotlin.math.min
 
@@ -353,8 +353,10 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
         .labelAlign(Align.left).color(Color.lightGray)
       t.row()
       t.table(HeAssets.darkGrayUIAlpha) { l ->
-        l.left().top().add(mods, Label.LabelStyle(MarkdownStyles.defaultMD.codeFont, Color.white))
-          .pad(6f).wrap()
+        l.left().top().add(
+          mods,
+          Label.LabelStyle(MarkdownStyles.defaultMD.codeFont.fontModifier, Color.white)
+        ).pad(6f).wrap()
       }.margin(12f).minWidth(420f).growX()
     }
   }
@@ -541,7 +543,7 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
             current = i
 
             when (i) {
-              0 -> desc.add(Markdown(mod.description, MarkdownStyles.defaultMD))
+              0 -> desc.add(Markdown(mod.description?:"", MarkdownStyles.defaultMD))
               1 -> desc.add(mod.description).wrap()
             }
           }

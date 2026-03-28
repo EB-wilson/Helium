@@ -33,7 +33,6 @@ import helium.ui.dialogs.ModsDialogHelper.buildModErrList
 import helium.ui.dialogs.ModsDialogHelper.setupContentsList
 import helium.ui.dialogs.Name
 import helium.ui.elements.HeCollapser
-import helium.util.accessField
 import mindustry.Vars
 import mindustry.content.Planets
 import mindustry.ctype.UnlockableContent
@@ -48,8 +47,9 @@ import mindustry.ui.dialogs.BaseDialog
 import mindustry.ui.dialogs.CampaignRulesDialog
 import mindustry.ui.dialogs.LoadDialog
 import mindustry.ui.dialogs.PlanetDialog
-import universecore.ui.elements.markdown.Markdown
-import universecore.ui.elements.markdown.MarkdownStyles
+import universe.ui.markdown.Markdown
+import universe.ui.markdown.MarkdownStyles
+import universe.util.reflect.Reflection.accessField
 import kotlin.math.max
 
 class ModPackerDialog: BaseDialog(Core.bundle["dialog.modPacker.title"]) {
@@ -69,8 +69,6 @@ class ModPackerDialog: BaseDialog(Core.bundle["dialog.modPacker.title"]) {
   private var filesShow = false
 
   private val selectCampaignDialog = object: PlanetDialog(){
-    val PlanetDialog.campaignRules: CampaignRulesDialog by accessField("campaignRules")
-
     fun selectable(planet: Planet): Boolean {
       return (planet.alwaysUnlocked && planet.isLandable) || planet.sectors.contains { obj -> obj.hasBase() } || debugSelect
     }
@@ -82,7 +80,7 @@ class ModPackerDialog: BaseDialog(Core.bundle["dialog.modPacker.title"]) {
           val pane = ScrollPane(null, Styles.smallPane)
           t.add(pane).colspan(2).row()
           t.button("@campaign.difficulty", Icon.bookSmall) {
-            campaignRules.show(state.planet)
+            Vars.ui.campaignRules.show(state.planet)
           }.margin(12f).size(208f, 40f).padTop(12f)
             .visible { state.planet.allowCampaignRules && mode != Mode.planetLaunch }.row()
           t.add().height(64f) //padding for close button

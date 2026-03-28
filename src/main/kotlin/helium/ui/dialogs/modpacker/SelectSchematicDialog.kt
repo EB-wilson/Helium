@@ -15,9 +15,6 @@ import arc.scene.ui.layout.Table
 import arc.struct.Seq
 import arc.util.Align
 import arc.util.Scaling
-import helium.util.accessBoolean
-import helium.util.accessField
-import helium.util.accessMethod0
 import mindustry.Vars
 import mindustry.game.Schematic
 import mindustry.gen.Icon
@@ -25,6 +22,9 @@ import mindustry.gen.Tex
 import mindustry.input.Binding
 import mindustry.ui.Styles
 import mindustry.ui.dialogs.SchematicsDialog
+import universe.util.reflect.Reflection.accessBoolean
+import universe.util.reflect.Reflection.accessField
+import universe.util.reflect.Reflection.accessMethod0
 import java.util.*
 import java.util.regex.Pattern
 import kotlin.math.max

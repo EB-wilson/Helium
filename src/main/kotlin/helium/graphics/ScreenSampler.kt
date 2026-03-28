@@ -11,12 +11,11 @@ import arc.graphics.gl.FrameBuffer
 import arc.graphics.gl.GLFrameBuffer
 import arc.graphics.gl.Shader
 import arc.util.serialization.Jval
-import helium.util.accessField
-import helium.util.mto
 import mindustry.Vars
 import mindustry.game.EventType
 import mindustry.graphics.Layer
 import mindustry.graphics.Pixelator
+import universe.util.reflect.Reflection.accessField
 
 object ScreenSampler {
   private val <T : GLTexture> GLFrameBuffer<T>.lastBoundFramebuffer: GLFrameBuffer<T>? by accessField("lastBoundFramebuffer")

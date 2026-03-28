@@ -45,8 +45,8 @@ import mindustry.graphics.Pal
 import mindustry.mod.Mods
 import mindustry.ui.Styles
 import mindustry.ui.dialogs.BaseDialog
-import universecore.ui.elements.markdown.Markdown
-import universecore.ui.elements.markdown.MarkdownStyles
+import universe.ui.markdown.Markdown
+import universe.ui.markdown.MarkdownStyles
 
 class HeModsDialog: BaseDialog(Core.bundle["mods"]) {
   val browser = HeModsBrowser()
