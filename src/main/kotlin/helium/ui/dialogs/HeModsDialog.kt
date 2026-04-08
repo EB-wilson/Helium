@@ -7,11 +7,15 @@ import arc.graphics.g2d.TextureRegion
 import arc.math.Interp
 import arc.scene.actions.Actions
 import arc.scene.style.TextureRegionDrawable
-import arc.scene.ui.*
+import arc.scene.ui.Image
+import arc.scene.ui.Label
 import arc.scene.ui.layout.Scl
 import arc.scene.ui.layout.Table
 import arc.struct.ObjectMap
-import arc.util.*
+import arc.util.Align
+import arc.util.Http
+import arc.util.Log
+import arc.util.Scaling
 import arc.util.serialization.Jval
 import helium.He
 import helium.addEventBlocker
@@ -35,7 +39,9 @@ import helium.ui.dialogs.ModsDialogHelper.getModList
 import helium.ui.dialogs.ModsDialogHelper.setupContentsList
 import helium.ui.dialogs.ModsDialogHelper.showDownloadModDialog
 import helium.ui.elements.HeCollapser
-import helium.util.*
+import helium.util.LOCAL_FILE
+import helium.util.ModStat
+import helium.util.UP_TO_DATE
 import mindustry.Vars
 import mindustry.Vars.modGuideURL
 import mindustry.ctype.UnlockableContent
@@ -44,11 +50,16 @@ import mindustry.gen.Tex
 import mindustry.graphics.Pal
 import mindustry.mod.Mods
 import mindustry.ui.Styles
-import mindustry.ui.dialogs.BaseDialog
+import universe.ui.dialogs.AttachableDialog
 import universe.ui.markdown.Markdown
 import universe.ui.markdown.MarkdownStyles
 
-class HeModsDialog: BaseDialog(Core.bundle["mods"]) {
+class HeModsDialog: AttachableDialog(
+  Vars.ui.mods,
+  HeAssets.heIcon,
+  "Helium",
+  Core.bundle["mods"],
+) {
   val browser = HeModsBrowser()
 
   private val modTabs = ObjectMap<Mods.LoadedMod, Table>()
@@ -56,14 +67,22 @@ class HeModsDialog: BaseDialog(Core.bundle["mods"]) {
 
   private val shouldRelaunch get() = Vars.mods.requiresReload()
   private lateinit var tipTable: Table
-  private lateinit var disabled: Table
-  private lateinit var enabled: Table
+  private lateinit var disabledMods: Table
+  private lateinit var enabledMods: Table
 
   private var searchStr = ""
 
   init {
-    shown(::rebuild)
-    resized(::rebuild)
+    resizedShown(::rebuild)
+
+    fill { over ->
+      resizedShown {
+        over.clearChildren()
+        over.table {
+          it.fillDefaultSwitch()
+        }.padTop(titleTable.prefHeight).grow()
+      }
+    }
 
     hidden {
       if (shouldRelaunch) {
@@ -78,10 +97,12 @@ class HeModsDialog: BaseDialog(Core.bundle["mods"]) {
   }
 
   fun rebuild(){
+    getCell(buttons)?.padBottom(if (Core.graphics.isPortrait) 29f else 3f)
+
     cont.clearChildren()
 
     cont.table { main ->
-      if (Core.graphics.isPortrait){
+      if (Core.graphics.isPortrait) {
         main.stack(
           Table(HeAssets.grayUIAlpha) { list ->
             list.top().margin(6f)
@@ -137,7 +158,7 @@ class HeModsDialog: BaseDialog(Core.bundle["mods"]) {
                 en.line(Pal.accent, true, 4f).padTop(6f).padBottom(6f)
                 en.row()
                 en.top().table { enabled ->
-                  this.enabled = enabled
+                  this.enabledMods = enabled
                 }.growX().fillY().top()
               }.margin(6f).growX().fillY()
               pane.row()
@@ -147,7 +168,7 @@ class HeModsDialog: BaseDialog(Core.bundle["mods"]) {
                 di.line(Pal.accent, true, 4f).padTop(6f).padBottom(6f)
                 di.row()
                 di.top().table { disabled ->
-                  this.disabled = disabled
+                  this.disabledMods = disabled
                 }.growX().fillY().top()
               }.margin(6f).growX().fillY()
             }.growX().fillY().scrollX(false).scrollY(true).get().setForceScroll(true, true)
@@ -194,7 +215,7 @@ class HeModsDialog: BaseDialog(Core.bundle["mods"]) {
                 list.add(Core.bundle["dialog.mods.enabled"]).color(Pal.accent)
                 list.row()
                 buildModsLayout(list){
-                  this.enabled = it
+                  this.enabledMods = it
                 }
               }.fillX().growY()
             }.fillX().growY()
@@ -205,7 +226,7 @@ class HeModsDialog: BaseDialog(Core.bundle["mods"]) {
                 list.add(Core.bundle["dialog.mods.disabled"]).color(Pal.accent)
                 list.row()
                 buildModsLayout(list){
-                  this.disabled = it
+                  this.disabledMods = it
                 }
               }.fillX().growY()
             }.fillX().growY()
@@ -275,8 +296,8 @@ class HeModsDialog: BaseDialog(Core.bundle["mods"]) {
   }
 
   fun rebuildMods(){
-    enabled.clearChildren()
-    disabled.clearChildren()
+    enabledMods.clearChildren()
+    disabledMods.clearChildren()
 
     Vars.mods.list()
       .filter {
@@ -288,7 +309,7 @@ class HeModsDialog: BaseDialog(Core.bundle["mods"]) {
         ModStat.apply {
           val stat = checkModStat(mod)
 
-          val addToTarget = if (mod.enabled() && stat.isValid()) enabled else disabled
+          val addToTarget = if (mod.enabled() && stat.isValid()) enabledMods else disabledMods
           val modTab = buildModTab(mod)
 
           addToTarget.add(modTab).growX().fillY().pad(4f)

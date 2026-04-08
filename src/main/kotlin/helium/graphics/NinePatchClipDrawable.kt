@@ -5,8 +5,8 @@ import arc.graphics.g2d.Draw
 import arc.graphics.g2d.NinePatch
 import arc.math.Mathf
 import arc.scene.style.NinePatchDrawable
-import universe.util.reflect.Reflection.accessField
-import universe.util.reflect.Reflection.accessInt
+import universe.util.reflect.accessField
+import universe.util.reflect.accessInt
 
 @Suppress("LeakingThis")
 open class NinePatchClipDrawable: BaseClipDrawable {

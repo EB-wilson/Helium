@@ -32,7 +32,8 @@ class HeConfig(configDir: Fi, internalSource: Fi) {
   @ConfigItem var loadInfo = true
 
   @ConfigItem var enableBlur = true
-  @ConfigItem var blurScl = 4
+  @ConfigItem var blurScl = 2
+  @ConfigItem var blurLevel = 2
   @ConfigItem var blurSpace = 1.25f
 
   @ConfigItem var enableEntityInfoDisplay = true
@@ -70,6 +71,7 @@ class HeConfig(configDir: Fi, internalSource: Fi) {
     set(value){ field = value; He.placement.rebuildCategory() }
 
   @ConfigItem var enableBetterModsDialog = true
+    set(value){ He.heModsDialog.enabled = value }
 
   fun load() {
     if (!configFile.exists()) {

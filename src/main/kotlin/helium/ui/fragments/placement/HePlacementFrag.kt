@@ -54,7 +54,7 @@ import mindustry.ui.fragments.PlacementFragment
 import mindustry.world.Block
 import mindustry.world.blocks.ConstructBlock.ConstructBuild
 import mindustry.world.meta.StatValues
-import universe.util.reflect.Reflection.accessField
+import universe.util.reflect.accessField
 import kotlin.math.roundToInt
 
 class HePlacementFrag {

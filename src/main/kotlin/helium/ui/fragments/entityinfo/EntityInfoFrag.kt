@@ -25,7 +25,6 @@ import arc.struct.Seq
 import arc.util.Scaling
 import arc.util.Time
 import arc.util.Tmp
-import arc.util.pooling.Pool
 import arc.util.pooling.Pools
 import helium.He
 import helium.He.config
@@ -44,7 +43,6 @@ import helium.util.IndexedSerial
 import helium.util.SerialObject
 import helium.util.enterSt
 import helium.util.exitSt
-import helium.util.poolObtain
 import mindustry.Vars
 import mindustry.entities.Units
 import mindustry.game.EventType
@@ -57,7 +55,7 @@ import mindustry.graphics.Pal
 import mindustry.input.Binding
 import mindustry.ui.Fonts
 import mindustry.ui.Styles
-import universe.util.reflect.Reflection.accessField
+import universe.util.reflect.accessField
 import java.util.*
 import kotlin.math.abs
 import kotlin.math.max

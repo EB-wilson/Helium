@@ -94,6 +94,7 @@ object He {
     global.autosave()
 
     HeStyles.uiBlur.blurScl = config.blurScl
+    HeStyles.uiBlur.blurLevel = config.blurLevel
     HeStyles.uiBlur.blurSpace = config.blurSpace
     Styles.defaultDialog.stageBackground = if (config.enableBlur) HeStyles.BLUR_BACK else Styles.black9
   }
@@ -135,7 +136,7 @@ object He {
     setupSettings(configDialog)
 
     heModsDialog = HeModsDialog()
-    setupHeModsDialog(heModsDialog)
+    heModsDialog.enabled = config.enableBetterModsDialog
 
     modPackerDialog = ModPackerDialog()
 
@@ -161,24 +162,6 @@ object He {
     placement.build(Vars.ui.hudGroup)
     hoveringInfo.build(Vars.ui.hudGroup)
     entityInfo.build(Vars.ui.hudGroup)
-  }
-
-  private fun setupHeModsDialog(heModsDialog: HeModsDialog) {
-    if (config.enableBetterModsDialog) {
-      Vars.ui.mods.also {
-        it.style = Dialog.DialogStyle().also { s ->
-          s.background = Styles.none
-          s.titleFont = Fonts.def
-        }
-        it.clear()
-        it.shown {
-          Core.app.post {
-            it.hide(null)
-            heModsDialog.show()
-          }
-        }
-      }
-    }
   }
 
   private fun genGlobal() = object : Settings() {
@@ -278,6 +261,11 @@ object He {
       ConfigCheck(
         "enableBlur",
         config::enableBlur
+      ),
+      ConfigSlider(
+        "blurLevel",
+        config::blurLevel,
+        1, 8, 1
       ),
       ConfigSlider(
         "blurScl",

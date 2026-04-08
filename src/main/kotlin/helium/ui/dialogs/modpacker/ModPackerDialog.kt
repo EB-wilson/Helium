@@ -44,12 +44,10 @@ import mindustry.graphics.Pal
 import mindustry.type.Planet
 import mindustry.ui.Styles
 import mindustry.ui.dialogs.BaseDialog
-import mindustry.ui.dialogs.CampaignRulesDialog
 import mindustry.ui.dialogs.LoadDialog
 import mindustry.ui.dialogs.PlanetDialog
 import universe.ui.markdown.Markdown
 import universe.ui.markdown.MarkdownStyles
-import universe.util.reflect.Reflection.accessField
 import kotlin.math.max
 
 class ModPackerDialog: BaseDialog(Core.bundle["dialog.modPacker.title"]) {

@@ -6,7 +6,9 @@
   //启用UI模糊视效
   "enableBlur": true,
   //模糊级别
-  "blurScl": 4,
+  "blurLevel": 2,
+  //模糊缩放
+  "blurScl": 2,
   //模糊强度
   "blurSpace": 1.25,
 

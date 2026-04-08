@@ -14,7 +14,7 @@ import mindustry.entities.EntityIndexer
 import mindustry.game.Team
 import mindustry.gen.*
 import mindustry.gen.Unit
-import universe.util.reflect.Reflection.accessField
+import universe.util.reflect.accessField
 import java.lang.reflect.Field
 
 abstract class DisplayProvider<E, T: EntityInfoDisplay<E>>{

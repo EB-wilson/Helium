@@ -22,9 +22,9 @@ import mindustry.gen.Tex
 import mindustry.input.Binding
 import mindustry.ui.Styles
 import mindustry.ui.dialogs.SchematicsDialog
-import universe.util.reflect.Reflection.accessBoolean
-import universe.util.reflect.Reflection.accessField
-import universe.util.reflect.Reflection.accessMethod0
+import universe.util.reflect.accessBoolean
+import universe.util.reflect.accessField
+import universe.util.reflect.accessMethod0
 import java.util.*
 import java.util.regex.Pattern
 import kotlin.math.max

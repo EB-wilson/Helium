@@ -3,6 +3,7 @@ package helium.ui
 import arc.Core
 import arc.Events
 import arc.graphics.Color
+import arc.graphics.g2d.Draw
 import arc.scene.style.Drawable
 import arc.scene.style.NinePatchDrawable
 import arc.scene.style.TextureRegionDrawable
@@ -53,7 +54,7 @@ object HeStyles {
   lateinit var flatS: StripButtonStyle
   lateinit var grayS: StripButtonStyle
 
-  var uiBlur: Blur = Blur(*DEf_B)
+  var uiBlur: Blur = Blur()
 
   private var drawingCounter = 0
   private var lastDialogs = 0
@@ -65,8 +66,8 @@ object HeStyles {
     BLUR_BACK = object : TextureRegionDrawable(Core.atlas.white()) {
       override fun draw(x: Float, y: Float, width: Float, height: Float) {
         drawingCounter++
-        if (drawingCounter == lastDialogs) uiBlur.directDraw {
-          super.draw(x, y, width, height)
+        if (drawingCounter == lastDialogs) uiBlur.drawBlur {
+          rect(Draw.getColorAlpha(), x - width/2f, y - height/2f, width, height)
         }
 
         Styles.black5.draw(x, y, width, height)
@@ -79,8 +80,9 @@ object HeStyles {
         rotation: Float,
       ) {
         drawingCounter++
-        if (drawingCounter == lastDialogs) uiBlur.directDraw {
-          super.draw(
+        if (drawingCounter == lastDialogs) uiBlur.drawBlur {
+          rect(
+            Draw.getColorAlpha(),
             x, y, originX, originY,
             width, height,
             scaleX, scaleY,
@@ -102,11 +104,12 @@ object HeStyles {
         stripWidth: Float,
       ) {
         drawingCounter++
-        if (drawingCounter == lastDialogs) uiBlur.directDraw {
-          super.draw(
+        if (drawingCounter == lastDialogs) uiBlur.drawBlur {
+          circleStrip(
+            Draw.getColorAlpha(),
             originX, originY,
-            angle, distance,
-            angleDelta, stripWidth,
+            distance, distance + stripWidth,
+            angleDelta, angle,
           )
         }
       }

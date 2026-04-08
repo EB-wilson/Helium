@@ -1,224 +1,426 @@
 package helium.graphics
 
 import arc.Core
-import arc.graphics.Blending
-import arc.graphics.Color
+import arc.graphics.*
+import arc.graphics.g2d.Draw
 import arc.graphics.gl.FrameBuffer
 import arc.graphics.gl.Shader
-import arc.util.Log
-import kotlin.math.abs
+import arc.math.Angles
+import arc.math.Mat
+import arc.math.Mathf
+import arc.math.geom.Vec2
+import helium.Helium
+import universe.graphic.ScreenSampler
 
-val DEf_A: FloatArray = floatArrayOf(
-  0.008697324f, 0.035994977f, 0.10936101f,
-  0.21296589f,  0.26596153f,  0.21296589f,
-  0.10936101f,  0.035994977f, 0.008697324f,
-)
-val DEf_B: FloatArray = floatArrayOf(
-  0.044408645f, 0.07799442f, 0.11599662f,
-  0.16730806f,  0.1885769f,  0.16730806f,
-  0.11599662f,  0.07799442f, 0.044408645f,
-)
-val DEf_C: FloatArray = floatArrayOf(
-  0.0045418483f, 0.053999867f, 0.24198672f,
-                 0.39894313f,
-  0.24198672f,   0.053999867f, 0.0045418483f,
-)
-val DEf_D: FloatArray = floatArrayOf(
-  0.02454185f, 0.06399987f, 0.2519867f,
-               0.3189431f,
-  0.2519867f,  0.06399987f, 0.02454185f,
-)
-val DEf_E: FloatArray = floatArrayOf(
-  0.01961571f, 0.20542552f,
-         0.55991757f,
-  0.20542552f, 0.01961571f,
-)
-val DEf_F: FloatArray = floatArrayOf(
-  0.07027027f, 0.31621623f,
-         0.22702703f,
-  0.31621623f, 0.07027027f,
-)
-val DEf_G: FloatArray = floatArrayOf(
-  0.20798193f,
-  0.68403614f,
-  0.20798193f,
-)
-val DEf_H: FloatArray = floatArrayOf(
-  0.25617367f,
-  0.4876527f,
-  0.25617367f,
-)
+class Blur {
+  companion object {
+    private const val VERTEX_SIZE = 3
+    private const val SHAPE_SIZE = VERTEX_SIZE*4
+    private val tmpVert1: FloatArray = FloatArray(SHAPE_SIZE)
+    private val tmpVert2: FloatArray = FloatArray(SHAPE_SIZE)
 
-private const val vertTemplate =
-  """
-  attribute vec4 a_position;
-  attribute vec2 a_texCoord0;
-  
-  uniform vec2 u_dir;
-  uniform vec2 u_size;
-  
-  varying vec2 v_texCoords;
-  
-  %varying%
-  
-  void main(){
-    vec2 len = u_dir/u_size;
-  
-    v_texCoords = a_texCoord0;
-    %assignVar%
-    gl_Position = a_position;
+    private val v1 = Vec2()
+    private val v2 = Vec2()
+    private val v3 = Vec2()
+    private val v4 = Vec2()
   }
-  """
-private const val fragmentTemplate =
-  """
-  uniform lowp sampler2D u_texture0;
-  uniform lowp sampler2D u_texture1;
-  
-  uniform lowp float u_def_alpha;
-  
-  varying vec2 v_texCoords;
-  
-  %varying%
-  
-  void main(){
-    vec4 blur = texture2D(u_texture0, v_texCoords);
-    vec3 color = texture2D(u_texture1, v_texCoords).rgb;
-  
-    if(blur.a > 0.0){
-      vec3 blurColor =
-          %convolution%
-  
-      gl_FragColor.rgb = mix(color, blurColor, blur.a);
-      gl_FragColor.a = 1.0;
+
+  private val baseShader: Shader = Shader(
+    Helium.getInternalFile("shaders").child("gauss_blur.vert"),
+    Helium.getInternalFile("shaders").child("blur_base.frag"),
+  ).also { shader ->
+    shader.bind()
+    shader.setUniformi("u_screen", 0)
+  }
+  private val blurShader: Shader = Shader(
+    Helium.getInternalFile("shaders").child("gauss_blur.vert"),
+    Helium.getInternalFile("shaders").child("gauss_blur.frag"),
+  ).also { shader ->
+    shader.bind()
+    shader.setUniformi("u_screen", 0)
+  }
+  private val pingpong1: FrameBuffer = FrameBuffer()
+  private val pingpong2: FrameBuffer = FrameBuffer()
+  private val mesh = Mesh(
+    false, 4000, 6000,
+    VertexAttribute.position,
+    VertexAttribute(1, Gl.floatV, true, "a_strength")
+  ).also { mesh ->
+    val len = 6000
+    val indices = ShortArray(6000)
+
+    var j: Short = 0
+    var i = 0
+    while (i < len) {
+      indices[i] = j
+      indices[i + 1] = (j + 1).toShort()
+      indices[i + 2] = (j + 2).toShort()
+      indices[i + 3] = (j + 2).toShort()
+      indices[i + 4] = (j + 3).toShort()
+      indices[i + 5] = j
+      i += 6
+      j = (j + 4).toShort()
     }
-    else{
-      gl_FragColor.rgb = color;
-      gl_FragColor.a = u_def_alpha;
-    }
-  }
-  """
 
-class Blur(vararg convolutions: Float = DEf_F) {
-  var blurShader: Shader
-  var buffer: FrameBuffer
-  var pingpong: FrameBuffer
-
-  var capturing: Boolean = false
-
-  var blurScl: Int = 4
-  var blurSpace: Float = 2.16f
-
-  init {
-    blurShader = genShader(*convolutions)
-
-    buffer = FrameBuffer()
-    pingpong = FrameBuffer()
-
-    blurShader.bind()
-    blurShader.setUniformi("u_texture0", 0)
-    blurShader.setUniformi("u_texture1", 1)
+    mesh.setIndices(indices)
+    mesh.verticesBuffer.position(0)
+    mesh.verticesBuffer.limit(mesh.verticesBuffer.capacity())
+    //mark indices as dirty once for GL30
+    mesh.indicesBuffer
   }
 
-  private fun genShader(vararg convolutions: Float): Shader {
-    require(convolutions.size%2 == 1) { "convolution numbers length must be odd number!" }
+  private val transformMatrix: Mat = Mat()
+  private val projectionMatrix: Mat = Mat()
+  private val combinedMatrix = Mat()
 
-    val convLen = convolutions.size
+  private val drawInst = DrawBlur()
 
-    val varyings = StringBuilder()
-    val assignVar = StringBuilder()
-    val convolution = StringBuilder()
+  private val buffer = mesh.verticesBuffer
+  private var idx = 0
 
-    var c = 0
-    val half = convLen/2
-    for (v in convolutions) {
-      varyings.append("varying vec2 v_texCoords")
-        .append(c)
-        .append(";")
-        .append("\n")
-
-      assignVar.append("v_texCoords")
-        .append(c)
-        .append(" = ")
-        .append("a_texCoord0")
-      if (c - half != 0) {
-        assignVar.append(if (c - half > 0) "+" else "-")
-          .append(abs((c.toFloat() - half).toDouble()).toFloat())
-          .append("*len")
-      }
-      assignVar.append(";")
-        .append("\n")
-        .append("  ")
-
-      if (c > 0) convolution.append("        + ")
-      convolution.append(v)
-        .append("*texture2D(u_texture1, v_texCoords")
-        .append(c)
-        .append(")")
-        .append(".rgb")
-        .append("\n")
-
-      c++
-    }
-    convolution.append(";")
-
-    val vertexShader = vertTemplate
-      .replace("%varying%", varyings.toString())
-      .replace("%assignVar%", assignVar.toString())
-    val fragmentShader = fragmentTemplate
-      .replace("%varying%", varyings.toString())
-      .replace("%convolution%", convolution.toString())
-
-    return Shader(vertexShader, fragmentShader)
-  }
+  var blurSpace: Float = 1.5f
+  var blurScl: Int = 2
+  var blurLevel: Int = 2
 
   fun resize(width: Int, height: Int) {
     val w = width/blurScl
     val h = height/blurScl
 
-    buffer.resize(w, h)
-    pingpong.resize(w, h)
+    pingpong1.resize(w, h)
+    pingpong2.resize(w, h)
 
     blurShader.bind()
-    blurShader.setUniformf("u_size", w.toFloat(), h.toFloat())
+    blurShader.setUniformf("u_screenSize", w.toFloat(), h.toFloat())
+    baseShader.bind()
+    baseShader.setUniformf("u_screenSize", width.toFloat(), height.toFloat())
   }
 
-  fun capture() {
-    if (!capturing) {
-      buffer.begin(Color.clear)
+  fun drawBlur(
+    proj: Mat = Draw.proj(),
+    trans: Mat = Draw.trans(),
+    block: DrawBlur.() -> Unit,
+  ) {
+    resize(Core.graphics.width, Core.graphics.height)
 
-      capturing = true
+    discard()
+    setProjection(proj)
+    setTransform(trans)
+    drawInst.block()
+    render()
+  }
+
+  fun pushShape(vertices: FloatArray, offset: Int = 0, count: Int = vertices.size) {
+    val verticesLength = buffer.capacity()
+    if (offset + count >= verticesLength - idx)
+      throw IllegalStateException("A blur batch in once render can only have 1000 shapes (4000 vertices)")
+
+    buffer.put(vertices, offset, count)
+    idx += count
+  }
+
+  fun pushShape(
+    strength: Float,
+    x: Float,
+    y: Float,
+    originX: Float,
+    originY: Float,
+    width: Float,
+    height: Float,
+    rotation: Float,
+  ){
+    val vertices = tmpVert1
+    val idx = idx
+
+    if (!Mathf.zero(rotation)) {
+      val worldOriginX = x + originX
+      val worldOriginY = y + originY
+      val fx = -originX
+      val fy = -originY
+      val fx2 = width - originX
+      val fy2 = height - originY
+
+      val cos = Mathf.cosDeg(rotation)
+      val sin = Mathf.sinDeg(rotation)
+
+      val x1 = cos*fx - sin*fy + worldOriginX
+      val y1 = sin*fx + cos*fy + worldOriginY
+      val x2 = cos*fx - sin*fy2 + worldOriginX
+      val y2 = sin*fx + cos*fy2 + worldOriginY
+      val x3 = cos*fx2 - sin*fy2 + worldOriginX
+      val y3 = sin*fx2 + cos*fy2 + worldOriginY
+      val x4 = x1 + (x3 - x2)
+      val y4 = y3 - (y2 - y1)
+
+      vertices[idx] = x1
+      vertices[idx + 1] = y1
+      vertices[idx + 2] = strength
+
+      vertices[idx + 3] = x2
+      vertices[idx + 4] = y2
+      vertices[idx + 5] = strength
+
+      vertices[idx + 6] = x3
+      vertices[idx + 7] = y3
+      vertices[idx + 8] = strength
+
+      vertices[idx + 9] = x4
+      vertices[idx + 10] = y4
+      vertices[idx + 11] = strength
     }
+    else {
+      val fx2 = x + width
+      val fy2 = y + height
+
+      vertices[idx] = x
+      vertices[idx + 1] = y
+      vertices[idx + 2] = strength
+
+      vertices[idx + 3] = x
+      vertices[idx + 4] = fy2
+      vertices[idx + 5] = strength
+
+      vertices[idx + 6] = fx2
+      vertices[idx + 7] = fy2
+      vertices[idx + 8] = strength
+
+      vertices[idx + 9] = fx2
+      vertices[idx + 10] = y
+      vertices[idx + 11] = strength
+    }
+
+    buffer.put(vertices, 0, SHAPE_SIZE)
+    this.idx += SHAPE_SIZE
+  }
+
+  fun getProjection(): Mat {
+    return projectionMatrix
+  }
+
+  fun getTransform(): Mat {
+    return transformMatrix
+  }
+
+  fun setProjection(projection: Mat) {
+    projectionMatrix.set(projection)
+  }
+
+  fun setTransform(transform: Mat) {
+    transformMatrix.set(transform)
+  }
+
+  private fun commitVertices(back: Texture, shader: Shader){
+    back.bind()
+    val count = idx/SHAPE_SIZE*6
+    mesh.render(shader, Gl.triangles, 0, count)
+  }
+
+  fun discard(){
+    idx = 0
+    buffer.position(0)
   }
 
   fun render() {
-    if (!capturing) return
-    capturing = false
-    buffer.end()
-
+    Gl.depthMask(false)
     Blending.disabled.apply()
+
+    ScreenSampler.toBuffer(pingpong1)
+    ScreenSampler.toBuffer(pingpong2)
+
+    buffer.position(0)
+    buffer.limit(idx)
 
     blurShader.bind()
     blurShader.apply()
-    blurShader.setUniformf("u_dir", blurSpace, 0f)
-    blurShader.setUniformf("u_def_alpha", 1f)
-    buffer.texture.bind(0)
+    combinedMatrix.set(projectionMatrix).mul(transformMatrix)
+    blurShader.setUniformMatrix4("u_projTrans", combinedMatrix)
 
-    pingpong.begin()
-    ScreenSampler.blit(blurShader, 1)
-    pingpong.end()
+    for (n in 0 until blurLevel) {
+      pingpong2.begin()
+      blurShader.bind()
+      blurShader.setUniformf("u_blurDirection", blurSpace, 0f)
+      commitVertices(pingpong1.texture, blurShader)
+      pingpong2.end()
 
-    blurShader.setUniformf("u_dir", 0f, blurSpace)
-    blurShader.setUniformf("u_def_alpha", 0f)
-    pingpong.texture.bind(1)
+      pingpong1.begin()
+      blurShader.bind()
+      blurShader.setUniformf("u_blurDirection", 0f, blurSpace)
+      commitVertices(pingpong2.texture, blurShader)
+      pingpong1.end()
+    }
+
+    baseShader.bind()
+    baseShader.apply()
+    baseShader.setUniformMatrix4("u_projTrans", combinedMatrix)
+    commitVertices(pingpong1.texture, baseShader)
+
+    buffer.limit(buffer.capacity())
+    buffer.position(0)
+    idx = 0
 
     Blending.normal.apply()
-    buffer.blit(blurShader)
   }
 
-  fun directDraw(draw: Runnable) {
-    resize(Core.graphics.width, Core.graphics.height)
-    capture()
-    draw.run()
-    render()
+  inner class DrawBlur {
+    fun rect(strength: Float, x: Float, y: Float, width: Float, height: Float) {
+      pushShape(strength, x + width/2f, y + height/2f, 0f, 0f, width, height, 0f)
+    }
+    fun rect(
+      strength: Float,
+      x: Float, y: Float, originX: Float, originY: Float,
+      width: Float, height: Float,
+      scaleX: Float, scaleY: Float,
+      rotation: Float,
+    ) {
+      pushShape(strength, x + width/2f, y + height/2f, width*scaleX, height*scaleY, originX, originY, rotation)
+    }
+    fun shape(
+      x1: Float, y1: Float, s1: Float,
+      x2: Float, y2: Float, s2: Float,
+      x3: Float, y3: Float, s3: Float,
+      x4: Float, y4: Float, s4: Float,
+    ){
+      val vertices = tmpVert2
+      vertices[0] = x1
+      vertices[1] = y1
+      vertices[1] = s1
+      vertices[2] = x2
+      vertices[3] = y2
+      vertices[3] = s2
+      vertices[4] = x3
+      vertices[5] = y3
+      vertices[5] = s3
+      vertices[6] = x4
+      vertices[7] = y4
+      vertices[7] = s4
+      pushShape(vertices)
+    }
+    fun poly(strength: Float, x: Float, y: Float, sides: Int, radius: Float, rotation: Float) {
+      when (sides) {
+        3 -> {
+          shape(
+            x + Angles.trnsx(rotation, radius),
+            y + Angles.trnsy(rotation, radius),
+            strength,
+            x + Angles.trnsx(120f + rotation, radius),
+            y + Angles.trnsy(120f + rotation, radius),
+            strength,
+            x + Angles.trnsx(240f + rotation, radius),
+            y + Angles.trnsy(240f + rotation, radius),
+            strength,
+            x + Angles.trnsx(rotation, radius),
+            y + Angles.trnsy(rotation, radius),
+            strength,
+          )
+        }
+        4 -> {
+          shape(
+            x + Angles.trnsx(rotation, radius),
+            y + Angles.trnsy(rotation, radius),
+            strength,
+            x + Angles.trnsx(90f + rotation, radius),
+            y + Angles.trnsy(90f + rotation, radius),
+            strength,
+            x + Angles.trnsx(180f + rotation, radius),
+            y + Angles.trnsy(180f + rotation, radius),
+            strength,
+            x + Angles.trnsx(270f + rotation, radius),
+            y + Angles.trnsy(270f + rotation, radius),
+            strength,
+          )
+        }
+        else -> {
+          val space = 360f/sides
+
+          run {
+            var i = 0
+            while (i < sides - 1) {
+              val px = Angles.trnsx(space*i + rotation, radius)
+              val py = Angles.trnsy(space*i + rotation, radius)
+              val px2 = Angles.trnsx(space*(i + 1) + rotation, radius)
+              val py2 = Angles.trnsy(space*(i + 1) + rotation, radius)
+              val px3 = Angles.trnsx(space*(i + 2) + rotation, radius)
+              val py3 = Angles.trnsy(space*(i + 2) + rotation, radius)
+              shape(
+                x, y, strength,
+                x + px, y + py, strength,
+                x + px2, y + py2, strength,
+                x + px3, y + py3, strength
+              )
+              i += 2
+            }
+          }
+
+          val mod = sides%2
+
+          if (mod == 0) return
+
+          val i = sides - 1
+
+          val px = Angles.trnsx(space*i + rotation, radius)
+          val py = Angles.trnsy(space*i + rotation, radius)
+          val px2 = Angles.trnsx(space*(i + 1) + rotation, radius)
+          val py2 = Angles.trnsy(space*(i + 1) + rotation, radius)
+          shape(
+            x, y, strength,
+            x + px, y + py, strength,
+            x + px2, y + py2, strength,
+            x, y, strength,
+          )
+        }
+      }
+    }
+
+    fun circle(strength: Float, x: Float, y: Float, radius: Float, sides: Int = 11 + (radius*0.4f).toInt()) {
+      poly(strength, x, y, sides, radius, 0f)
+    }
+
+    fun circleStrip(
+      strength: Float,
+      x: Float, y: Float, innerRadius: Float, radius: Float,
+      angle: Float, rotate: Float = 0f, sides: Int = 72,
+    ) {
+      val step = 360f/sides
+      val s = (angle/360*sides).toInt()
+
+      val rem = angle - s*step
+
+      for (i in 0 until s) {
+        val offX1 = Mathf.cosDeg(rotate + i*step)
+        val offY1 = Mathf.sinDeg(rotate + i*step)
+        val offX2 = Mathf.cosDeg(rotate + (i + 1)*step)
+        val offY2 = Mathf.sinDeg(rotate + (i + 1)*step)
+
+        val inner1 = v1.set(offX1, offY1).scl(innerRadius).add(x, y)
+        val inner2 = v2.set(offX2, offY2).scl(innerRadius).add(x, y)
+        val out1 = v3.set(offX1, offY1).scl(radius).add(x, y)
+        val out2 = v4.set(offX2, offY2).scl(radius).add(x, y)
+
+        shape(
+          inner1.x, inner1.y, strength,
+          inner2.x, inner2.y, strength,
+          out2.x, out2.y, strength,
+          out1.x, out1.y, strength,
+        )
+      }
+
+      if (rem > 0) {
+        val offX1 = Mathf.cosDeg(rotate + s*step)
+        val offY1 = Mathf.sinDeg(rotate + s*step)
+        val offX2 = Mathf.cosDeg(rotate + angle)
+        val offY2 = Mathf.sinDeg(rotate + angle)
+
+        val inner1 = v1.set(offX1, offY1).scl(innerRadius).add(x, y)
+        val inner2 = v2.set(offX2, offY2).scl(innerRadius).add(x, y)
+        val out1 = v3.set(offX1, offY1).scl(radius).add(x, y)
+        val out2 = v4.set(offX2, offY2).scl(radius).add(x, y)
+
+        shape(
+          inner1.x, inner1.y, strength,
+          inner2.x, inner2.y, strength,
+          out2.x, out2.y, strength,
+          out1.x, out1.y, strength,
+        )
+      }
+    }
   }
 }
