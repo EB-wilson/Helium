@@ -1,4 +1,4 @@
-package helium.ui.dialogs
+package helium.ui.dialogs.mods
 
 import arc.Core
 import arc.func.Cons

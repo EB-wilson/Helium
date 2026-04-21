@@ -22,6 +22,7 @@ import helium.ui.HeAssets
 import helium.ui.HeStyles
 import helium.ui.dialogs.*
 import helium.ui.dialogs.modpacker.ModPackerDialog
+import helium.ui.dialogs.mods.HeModsDialog
 import helium.ui.fragments.entityinfo.EntityInfoFrag
 import helium.ui.fragments.entityinfo.displays.*
 import helium.ui.fragments.placement.HePlacementFrag

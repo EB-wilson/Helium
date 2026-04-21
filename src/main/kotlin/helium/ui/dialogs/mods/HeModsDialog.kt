@@ -1,4 +1,4 @@
-package helium.ui.dialogs
+package helium.ui.dialogs.mods
 
 import arc.Core
 import arc.func.Cons
@@ -26,18 +26,18 @@ import helium.ui.HeAssets
 import helium.ui.UIUtils
 import helium.ui.UIUtils.closeBut
 import helium.ui.UIUtils.line
-import helium.ui.dialogs.ModsDialogHelper.addTip
-import helium.ui.dialogs.ModsDialogHelper.buildDescSelector
-import helium.ui.dialogs.ModsDialogHelper.buildErrorIcons
-import helium.ui.dialogs.ModsDialogHelper.buildLinkButton
-import helium.ui.dialogs.ModsDialogHelper.buildModAttrIcons
-import helium.ui.dialogs.ModsDialogHelper.buildModAttrList
-import helium.ui.dialogs.ModsDialogHelper.buildModBasicStatus
-import helium.ui.dialogs.ModsDialogHelper.buildModErrList
-import helium.ui.dialogs.ModsDialogHelper.buildStatus
-import helium.ui.dialogs.ModsDialogHelper.getModList
-import helium.ui.dialogs.ModsDialogHelper.setupContentsList
-import helium.ui.dialogs.ModsDialogHelper.showDownloadModDialog
+import helium.ui.dialogs.mods.ModsDialogHelper.addTip
+import helium.ui.dialogs.mods.ModsDialogHelper.buildDescSelector
+import helium.ui.dialogs.mods.ModsDialogHelper.buildErrorIcons
+import helium.ui.dialogs.mods.ModsDialogHelper.buildLinkButton
+import helium.ui.dialogs.mods.ModsDialogHelper.buildModAttrIcons
+import helium.ui.dialogs.mods.ModsDialogHelper.buildModAttrList
+import helium.ui.dialogs.mods.ModsDialogHelper.buildModBasicStatus
+import helium.ui.dialogs.mods.ModsDialogHelper.buildModErrList
+import helium.ui.dialogs.mods.ModsDialogHelper.buildStatus
+import helium.ui.dialogs.mods.ModsDialogHelper.getModList
+import helium.ui.dialogs.mods.ModsDialogHelper.setupContentsList
+import helium.ui.dialogs.mods.ModsDialogHelper.showDownloadModDialog
 import helium.ui.elements.HeCollapser
 import helium.util.LOCAL_FILE
 import helium.util.ModStat

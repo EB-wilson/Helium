@@ -132,7 +132,7 @@ tasks {
         ).joinToString(" ") { "--classpath $it" }
 
         //dex and desugar files - this requires d8 in your PATH
-        "${d8.absolutePath} $dependencies --min-api 14 --output ${project.name}-android.jar ${project.name}-desktop.jar"
+        "${d8.absolutePath} $dependencies --min-api 30 --output ${project.name}-android.jar ${project.name}-desktop.jar"
           .execute(File("$buildDir/libs"))
       }
       catch (e: Throwable) {
@@ -207,7 +207,9 @@ tasks {
     mainClass = "-jar"
     args = listOf(
       debugJarDir?: "",
-      "-debug"
+      "-debug",
+      "-gl",
+      "3.0"
     )
   }
 }

@@ -1,4 +1,4 @@
-package helium.ui.dialogs
+package helium.ui.dialogs.mods
 
 import arc.Core
 import arc.func.Cons
@@ -27,14 +27,14 @@ import helium.ui.ButtonEntry
 import helium.ui.HeAssets
 import helium.ui.UIUtils
 import helium.ui.UIUtils.line
-import helium.ui.dialogs.ModsDialogHelper.addTip
-import helium.ui.dialogs.ModsDialogHelper.buildModAttrIcons
-import helium.ui.dialogs.ModsDialogHelper.buildModAttrList
-import helium.ui.dialogs.ModsDialogHelper.buildStars
-import helium.ui.dialogs.ModsDialogHelper.buildStatus
-import helium.ui.dialogs.ModsDialogHelper.getModList
-import helium.ui.dialogs.ModsDialogHelper.showDownloadModDialog
-import helium.ui.dialogs.ModsDialogHelper.switchBut
+import helium.ui.dialogs.mods.ModsDialogHelper.addTip
+import helium.ui.dialogs.mods.ModsDialogHelper.buildModAttrIcons
+import helium.ui.dialogs.mods.ModsDialogHelper.buildModAttrList
+import helium.ui.dialogs.mods.ModsDialogHelper.buildStars
+import helium.ui.dialogs.mods.ModsDialogHelper.buildStatus
+import helium.ui.dialogs.mods.ModsDialogHelper.getModList
+import helium.ui.dialogs.mods.ModsDialogHelper.showDownloadModDialog
+import helium.ui.dialogs.mods.ModsDialogHelper.switchBut
 import helium.ui.elements.HeCollapser
 import helium.util.Downloader
 import helium.util.ModStat
