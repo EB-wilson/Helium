@@ -397,7 +397,7 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
             info.add(mod.shortDescription()).growY().growX().padRight(50f).wrap()
           },
           Table { over ->
-            over.top().right()
+            over.right()
 
             over.table { status ->
               status.top().defaults().size(26f).pad(4f)

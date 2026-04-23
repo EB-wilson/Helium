@@ -32,8 +32,6 @@ import mindustry.world.blocks.defense.ForceProjector.ForceBuild
 import mindustry.world.blocks.defense.MendProjector.MendBuild
 import mindustry.world.blocks.defense.OverdriveProjector.OverdriveBuild
 import mindustry.world.blocks.defense.turrets.BaseTurret.BaseTurretBuild
-import mindustry.world.blocks.defense.turrets.Turret
-import mindustry.world.blocks.defense.turrets.Turret.TurretBuild
 import mindustry.world.blocks.units.RepairTower
 import mindustry.world.blocks.units.RepairTurret
 import mindustry.world.meta.BlockStatus
@@ -106,11 +104,6 @@ class EntityRangeDisplayProvider: DisplayProvider<Ranged, EntityRangeDisplay>(),
   }
   override fun getConfigures() = listOf(
     ConfigPair(
-      "showAttackAngle",
-      Icon.down,
-      He.config::showAttackAngle
-    ),
-    ConfigPair(
       "showAttackRange",
       Icon.turret,
       He.config::showAttackRange
@@ -137,7 +130,6 @@ class EntityRangeDisplay(
   var vis = 0f
   var range = 0f
 
-  var holding = false
   var isUnit = false
   var isTurret = false
   var isRepair = false
@@ -177,9 +169,6 @@ class EntityRangeDisplay(
     || (isRepair && it.showHealRange)
     || (isOverdrive && it.showOverdriveRange)
   }
-
-  override val worldRender: Boolean get() = true
-  override val screenRender: Boolean get() = false
 
   override fun checkWorldClip(entity: Posc, worldViewport: Rect) = (range*2).let { clipSize ->
     worldViewport.overlaps(
@@ -240,50 +229,11 @@ class EntityRangeDisplay(
         rotate = Time.time/radius*12 + timeOffset
       )
     }
-
-    if (He.config.showAttackAngle && holding) {
-      Draw.z(Layer.light + 5)
-      Draw.color(entity.team().color, 0.1f + Mathf.absin(8f, 0.15f))
-      if (isTurret && entity is TurretBuild) drawTurretAttackCone(entity)
-      else if (isUnit) drawUnitAttackCone(entity as Unitc)
-    }
-  }
-
-  private fun drawUnitAttackCone(unit: Unitc) {
-    unit.mounts().forEach { weapon ->
-      val type = weapon.weapon
-      val coneAngle = type.shootCone
-      val weaponRot = if (weapon.rotate) weapon.rotation else type.baseRotation
-      val dir = weaponRot + unit.rotation()
-      val off = Tmp.v1.set(type.x, type.y).rotate(unit.rotation() - 90)
-      off.add(Tmp.v2.set(type.shootX, type.shootY).rotate(unit.rotation() - 90 + weaponRot))
-
-      val dx = unit.x() + off.x
-      val dy = unit.y() + off.y
-
-      DrawUtils.circleFan(
-        dx, dy, type.range(),
-        coneAngle*2, dir - coneAngle
-      )
-    }
-  }
-
-  private fun drawTurretAttackCone(turretBuild: TurretBuild) {
-    val block = turretBuild.block as Turret
-    val dir = turretBuild.buildRotation()
-    val coneAngle = block.shootCone
-    val offset = Tmp.v1.set(block.shootX, block.shootY).rotate(turretBuild.buildRotation() - 90)
-
-    DrawUtils.circleFan(
-   turretBuild.x() + offset.x, turretBuild.y() + offset.y,
-      block.range, coneAngle*2, dir - coneAngle
-    )
   }
 
   var n = 30
   var to = 0f
   override fun update(delta: Float, alpha: Float, isHovering: Boolean, isHolding: Boolean) {
-    holding = isHolding || isHovering
     if (n++ >= 30) {
       range = entity.range()
       to = building?.let {

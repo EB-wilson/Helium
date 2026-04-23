@@ -3,7 +3,6 @@ package helium
 import arc.files.Fi
 import arc.input.KeyCode
 import arc.util.Log
-import arc.util.Threads
 import arc.util.serialization.Jval
 import helium.graphics.HeShaders
 import helium.ui.fragments.entityinfo.displays.EntityRangeDisplay
@@ -53,7 +52,7 @@ class HeConfig(configDir: Fi, internalSource: Fi) {
         else -> null
       }
     }
-  @ConfigItem var showAttackAngle = true
+  @ConfigItem var enableAttackAngleDisplay = true
     set(value){ field = value; He.entityInfo.displaySetupUpdated() }
   @ConfigItem var showAttackRange = true
     set(value){ field = value; He.entityInfo.displaySetupUpdated() }
@@ -66,7 +65,7 @@ class HeConfig(configDir: Fi, internalSource: Fi) {
   @ConfigItem var entityInfoAlpha = 1f
 
   @ConfigItem var enableBetterPlacement = true
-  @ConfigItem var useFixedHoveringInfoPane = true
+  @ConfigItem var fixedHoveringInfoPane = true
   @ConfigItem var blockColumns = 5
     set(value){ field = value; He.placement.rebuildCategory() }
 

@@ -35,7 +35,7 @@ class HoveringInfoFrag {
     parent.fill { topLevel ->
       topTable = topLevel
 
-      topLevel.bottom().left().visible { He.config.useFixedHoveringInfoPane && Vars.ui.hudfrag.shown }
+      topLevel.bottom().left().visible { He.config.fixedHoveringInfoPane && Vars.ui.hudfrag.shown }
 
       topLevel.table { info ->
         info.add(
@@ -61,10 +61,10 @@ class HoveringInfoFrag {
             it.flowItems()?.stopFlow()
             it.liquids?.stopFlow()
           }
-          nextFlowBuild = flowingBuild
+          flowingBuild = nextFlowBuild
         }
 
-        nextFlowBuild?.also {
+        flowingBuild?.also {
           it.flowItems()?.updateFlow()
           it.liquids?.updateFlow()
         }

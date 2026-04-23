@@ -43,7 +43,7 @@ class DetailsDisplayProvider: DisplayProvider<Displayable, DetailsDisplay>(){
 
   override fun valid(entity: Posc) = entity is Displayable
 
-  override fun enabled() = true
+  override fun enabled() = !He.config.fixedHoveringInfoPane
 
   override fun provide(
     entity: Displayable,
@@ -125,7 +125,7 @@ class DetailsDisplay(
   }
 
   override fun shouldDisplay(): Boolean {
-    val res = !He.config.useFixedHoveringInfoPane || entity != He.hoveringInfo.currHovering()
+    val res = entity != He.hoveringInfo.currHovering()
 
     if(res && isHovered) showAlpha = 1f
 

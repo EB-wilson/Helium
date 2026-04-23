@@ -513,8 +513,8 @@ class EntityInfoFrag {
         hoveringEntries[entity.id()] = entry
         hoveringList.add(entry)
       }
-      else entityEntries[entity.id()] = entry
 
+      entityEntries[entity.id()] = entry
       entriesList.add(entry)
 
       return entry
@@ -523,11 +523,14 @@ class EntityInfoFrag {
     return null
   }
   fun removeEntry(entity: Entityc, hovering: Boolean = false) {
-    val ent = (if (hovering) hoveringEntries else entityEntries).remove(entity.id())
+    var ent = entityEntries.remove(entity.id())
+    if (hovering) {
+      hoveringEntries.remove(entity.id())?.also { if (ent == null) ent = it }
+    }
     if (ent == null) return
 
-    if (hovering) hoveringList.remove(ent)
     entriesList.remove(ent)
+    if (hovering) hoveringList.remove(ent)
 
     ent.displays.forEach { display ->
       if (display is InputEventChecker) display.element.remove()
@@ -551,6 +554,7 @@ class EntityInfoFrag {
       it.get().forEach(::addEntry)
     }
   }
+
   fun clearEntry() {
     entriesList.forEach { Pools.free(it) }
     entriesList.clear()
@@ -630,8 +634,7 @@ class EntityInfoFrag {
         val disabledTeam = disabledTeams[display.typeID]
         if (disabledTeam.get(display.team.id)) return@forEach
 
-        val ent = entityEntries[display.id].entity
-        if (!display.shouldDisplay() || !display.checkWorldClip(ent, worldViewport)) return@forEach
+        if (!display.shouldDisplay() || !display.checkWorldClip(e.entity, worldViewport)) return@forEach
         display.drawWorld(a)
       }
     }
@@ -670,20 +673,18 @@ class EntityInfoFrag {
       }
     }
 
-    hovering.forEach { it.mouseHovering = false }
+    hovering.forEach { it.hovering = false }
     hovering.clear(32)
     val team = Vars.player.team()
     fun execEntity(ent: Teamc){
       if (ent.inFogTo(team)) return
       val id = ent.id()
       var entry = hoveringEntries[id]
-      if (entry == null){
-        entry = addEntry(ent, true)
-      }
+      if (entry == null){ entry = addEntry(ent, true) }
+      if (entry == null) return
       entry.showing = true
 
-      hovering.add(entry.also { it.mouseHovering = true })
-      entityEntries[id]?.also { e -> hovering.add(e.also { it.mouseHovering = true }) }
+      hovering.add(entry.also { it.hovering = true })
     }
 
     val x1 = (selectionRect.x/Vars.tilesize).roundToInt()
@@ -772,7 +773,7 @@ class EntityInfoFrag {
       if (inFog) return@forEach
       val a = if (ent.isHovering) ent.alpha*alpha else alpha
       ent.displays.forEach { dis ->
-        dis.update(delta, a, ent.mouseHovering, ent.holding)
+        dis.update(delta, a, ent.hovering, ent.holding)
       }
     }
   }
@@ -926,8 +927,8 @@ class EntityEntry(
   override var indexes = intArrayOf(-1, -1)
   var player: Playerc? = null
 
-  var mouseHovering = false
   var holding = false
+  var hovering = false
   var inFog = false
 
   var alpha = 0f

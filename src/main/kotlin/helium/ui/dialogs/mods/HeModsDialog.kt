@@ -325,7 +325,7 @@ class HeModsDialog: AttachableDialog(
     var stat = ModStat.checkModStat(mod)
     var updateEntry: UpdateEntry? = null
     var coll: HeCollapser? = null
-    var setupContent = { i: Int -> }
+    var setupContent = { _: Int -> }
 
     modTabs[mod] = res
 
@@ -414,7 +414,7 @@ class HeModsDialog: AttachableDialog(
               }
 
               buttons.row()
-              buttons.button(Icon.exportSmall, Styles.clearNonei, 48f) { exportLink(mod) }
+              buttons.button(Icon.exportSmall, Styles.clearNonei, 48f) { shareMod(mod) }
               buttons.row()
 
               buttons.addEventBlocker()
@@ -496,24 +496,22 @@ class HeModsDialog: AttachableDialog(
             }.grow().margin(12f).padTop(0f)
           }
         },
-        Table{ lay ->
+        Table{ conf ->
           ModStat.apply {
-            lay.top().right().table { l ->
+            conf.top().right().table { l ->
               l.line(Color.darkGray, false, 3f)
               l.table { buttons ->
-                buttons.collapser(
-                  {
-                    it.button(Icon.upSmall, Styles.clearNonei, 48f) {
-                      val latest = updateEntry?.latestMod
-                      if (latest != null) {
-                        showDownloadModDialog(latest){
-                          rebuildMods()
-                        }
+                buttons.collapser({
+                  it.button(Icon.upSmall, Styles.clearNonei, 48f) {
+                    val latest = updateEntry?.latestMod
+                    if (latest != null) {
+                      showDownloadModDialog(latest){
+                        rebuildMods()
                       }
-                      else UIUtils.showError(Core.bundle["dialog.mods.noDownloadLink"])
-                    }.size(48f).visible { stat.isUpToDate() }
-                  }, false
-                ) { stat.isUpToDate() }.fill()
+                    }
+                    else UIUtils.showError(Core.bundle["dialog.mods.noDownloadLink"])
+                  }.size(48f).visible { stat.isUpToDate() }
+                }, false) { stat.isUpToDate() }.fill()
                 buttons.row()
                 buttons.button(Icon.trashSmall, Styles.clearNonei, 48f) { deleteMod(mod) }.size(48f)
               }.fill()
@@ -677,7 +675,59 @@ class HeModsDialog: AttachableDialog(
     }
   }
 
-  private fun exportLink(mod: Mods.LoadedMod) {
+  private fun shareMod(mod: Mods.LoadedMod) {
+    UIUtils.showPane(
+      Core.bundle["dialog.mods.shareMod"],
+      closeBut,
+    ){ t ->
+      val image = mod.iconTexture?.let {
+        TextureRegionDrawable(TextureRegion(it))
+      }?: Tex.nomap
+      val stat = ModStat.checkModStat(mod)
+
+      t.table(HeAssets.darkGrayUI) { cont ->
+        cont.table(Tex.buttonSelect) { icon ->
+          icon.image(image).scaling(Scaling.fit).size(80f)
+        }.pad(10f).margin(4f).size(88f)
+        cont.stack(
+          Table { info ->
+            info.left().top().margin(12f).marginLeft(6f).defaults().left()
+            info.add(mod.meta.displayName).color(Pal.accent).grow().padRight(160f).wrap()
+            info.row()
+            info.add(mod.meta.version, 0.8f).color(Color.lightGray).grow().padRight(50f).wrap()
+            info.row()
+            info.add(mod.meta.shortDescription()).grow().padRight(50f).wrap()
+          },
+          Table { info ->
+            info.top().right().defaults().right().top()
+            info.table { status ->
+              status.top().right().defaults().size(26f).pad(4f)
+
+              buildModAttrIcons(status, stat)
+            }.grow()
+          }
+        ).pad(12f).padLeft(4f).growX().fillY().minWidth(420f)
+      }.margin(6f).growX().fillY()
+
+      t.row()
+      t.button(
+        Core.bundle["dialog.mods.github"],
+        Icon.githubSmall,
+        Styles.flatt
+      ) { openGithubRepo(mod) }
+        .growX().fillY().margin(8f).marginTop(12f).marginBottom(12f).padTop(8f)
+
+      t.row()
+      t.button(
+        Core.bundle["dialog.mods.openFolder"],
+        Icon.exportSmall,
+        Styles.flatt
+      ){ Core.app.openFolder(mod.file.absolutePath()) }
+        .growX().fillY().margin(8f).marginTop(12f).marginBottom(12f).padTop(8f)
+    }
+  }
+
+  private fun openGithubRepo(mod: Mods.LoadedMod) {
     getModList(
       errHandler = { e ->
         Log.err(e)
@@ -721,7 +771,7 @@ class HeModsDialog: AttachableDialog(
   private fun checkModUpdate(
     mod: Mods.LoadedMod,
     errorHandler: Cons<Throwable>,
-    callback: Cons<UpdateEntry>
+    callback: Cons<UpdateEntry>,
   ) {
     val res = updateChecked.get(mod)
     if (res != null) callback(res)

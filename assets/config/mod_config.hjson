@@ -1,5 +1,5 @@
 {
-  "configVersion": 5,
+  "configVersion": 6,
 
   //=====Basic/基础设置=====//
 
@@ -27,7 +27,7 @@
   //范围显示器质量
   "rangeRenderLevel": 0,
   //显示实体攻击范围
-  "showAttackRange": true,
+  "enableAttackAngleDisplay": true,
   //显示攻击角度
   "showAttackAngle": true,
   //显示修复范围
@@ -38,7 +38,7 @@
   //启用更好的放置面板
   "enableBetterPlacement": true,
   //使用固定的悬停目标信息面板
-  "useFixedHoveringInfoPane": true,
+  "fixedHoveringInfoPane": true,
   //方块放置面板显示列数
   "blockColumns": 5,
 

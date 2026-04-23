@@ -31,7 +31,7 @@ abstract class DisplayProvider<E, T: EntityInfoDisplay<E>>{
 @Suppress("UNCHECKED_CAST")
 abstract class EntityInfoDisplay<E>(
   val entity: E,
-  val id: Int
+  val entityID: Int
 ){
   var team: Team = Team.derelict
   var index: Int = -1
@@ -84,6 +84,8 @@ abstract class WorldDrawOnlyDisplay<E>(
   override val layoutSide: Side get() = Side.CENTER
   override val prefWidth: Float get() = 0f
   override val prefHeight: Float get() = 0f
+  override val worldRender: Boolean get() = true
+  override val screenRender: Boolean get() = false
   override fun realWidth(prefSize: Float) = 0f
   override fun realHeight(prefSize: Float) = 0f
   override fun draw(alpha: Float, scale: Float, origX: Float, origY: Float, drawWidth: Float, drawHeight: Float) {}

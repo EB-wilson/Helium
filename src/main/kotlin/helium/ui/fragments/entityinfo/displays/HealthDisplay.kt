@@ -8,7 +8,6 @@ import arc.graphics.g2d.FontCache
 import arc.graphics.g2d.GlyphLayout
 import arc.math.Interp
 import arc.math.Mathf
-import arc.scene.ui.Tooltip
 import arc.scene.ui.layout.Scl
 import arc.scene.ui.layout.Table
 import arc.util.Align

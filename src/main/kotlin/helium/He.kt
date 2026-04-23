@@ -7,7 +7,6 @@ import arc.files.Fi
 import arc.func.*
 import arc.scene.Element
 import arc.scene.event.SceneEvent
-import arc.scene.ui.Dialog
 import arc.scene.ui.layout.Table
 import arc.struct.IntMap
 import arc.struct.ObjectFloatMap
@@ -31,7 +30,6 @@ import mindustry.Vars
 import mindustry.game.EventType
 import mindustry.gen.Icon
 import mindustry.graphics.Pal
-import mindustry.ui.Fonts
 import mindustry.ui.Styles
 import mindustry.ui.dialogs.SettingsMenuDialog
 
@@ -86,6 +84,7 @@ object He {
   lateinit var statusDisplay: StatusDisplayProvider
   lateinit var detailsDisplay: DetailsDisplayProvider
   lateinit var entityRangeDisplay: EntityRangeDisplayProvider
+  lateinit var angleDisplay: AttackAngleDisplayProvider
 
   lateinit var configDialog: ModConfigDialog
   lateinit var heModsDialog: HeModsDialog
@@ -242,9 +241,9 @@ object He {
     infos.addDisplay(UnitHealthDisplayProv().also { unitHealthBarDisplay = it })
     infos.addDisplay(BuildHealthDisplayProv().also { buildHealthBarDisplay = it })
     infos.addDisplay(StatusDisplayProvider().also { statusDisplay = it })
-
     infos.addDisplay(DetailsDisplayProvider().also { detailsDisplay = it })
     infos.addDisplay(EntityRangeDisplayProvider().also { entityRangeDisplay = it })
+    infos.addDisplay(AttackAngleDisplayProvider().also { angleDisplay = it })
 
     unitHealthBarDisplay.style = HeStyles.test
     buildHealthBarDisplay.style = HeStyles.test
@@ -286,8 +285,8 @@ object He {
         Pal.accentBack
       ),
       ConfigCheck(
-        "useFixedHoveringInfoPane",
-        config::useFixedHoveringInfoPane
+        "fixedHoveringInfoPane",
+        config::fixedHoveringInfoPane
       ),
       ConfigSlider(
         "entityInfoScale",
@@ -325,8 +324,8 @@ object He {
         else -> Core.bundle["range.animate.prof"]
       } },
       ConfigCheck(
-        "showAttackAngle",
-        config::showAttackAngle
+        "enableAttackAngleDisplay",
+        config::enableAttackAngleDisplay
       ),
       ConfigCheck(
         "showAttackRange",
