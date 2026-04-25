@@ -355,7 +355,7 @@ object ModsDialogHelper {
     "hotfix" to 9
   )
 
-  private fun tryCompareVersion(aVer: String, bVer: String): Int{
+  fun tryCompareVersion(aVer: String, bVer: String): Int{
     val aParagraph = paragraphMatcher.findAll(aVer.lowercase().trimStart('v')).map {
       it.value
     }.toList().also { if(it.isEmpty()) return 1 }.filter { it != "build" }
@@ -403,7 +403,7 @@ object ModsDialogHelper {
     val isUpdate =
       loaded != null
       && loaded.meta.version != modInfo.version
-      && tryCompareVersion(loaded.meta.version, modInfo.version) >= 1
+      && tryCompareVersion(loaded.meta.version, modInfo.version) < 0
 
     fun buildContent(content: Table) {
       val repoStr = modInfo.repo.replace("/", "_")

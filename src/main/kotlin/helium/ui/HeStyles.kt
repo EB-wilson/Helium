@@ -4,6 +4,7 @@ import arc.Core
 import arc.Events
 import arc.graphics.Color
 import arc.graphics.g2d.Draw
+import arc.graphics.g2d.Fill
 import arc.scene.style.Drawable
 import arc.scene.style.NinePatchDrawable
 import arc.scene.style.TextureRegionDrawable
@@ -67,7 +68,8 @@ object HeStyles {
       override fun draw(x: Float, y: Float, width: Float, height: Float) {
         drawingCounter++
         if (drawingCounter == lastDialogs) uiBlur.drawBlur {
-          rect(Draw.getColorAlpha(), x - width/2f, y - height/2f, width, height)
+          Draw.alpha(Draw.getColorAlpha())
+          Draw.rect(region, x + width/2f, y + height/2f, width, height)
         }
 
         Styles.black5.draw(x, y, width, height)
@@ -81,11 +83,12 @@ object HeStyles {
       ) {
         drawingCounter++
         if (drawingCounter == lastDialogs) uiBlur.drawBlur {
-          rect(
-            Draw.getColorAlpha(),
-            x, y, originX, originY,
-            width, height,
-            scaleX, scaleY,
+          Draw.alpha(Draw.getColorAlpha())
+          Draw.rect(
+            region,
+            x + width/2f, y + height/2f,
+            width*scaleX, height*scaleY,
+            originX, originY,
             rotation
           )
         }
@@ -105,12 +108,13 @@ object HeStyles {
       ) {
         drawingCounter++
         if (drawingCounter == lastDialogs) uiBlur.drawBlur {
-          circleStrip(
-            Draw.getColorAlpha(),
+          Draw.alpha(Draw.getColorAlpha())
+          DrawUtils.circleStrip(
             originX, originY,
             distance, distance + stripWidth,
             angleDelta, angle,
           )
+          Draw.color()
         }
       }
     }

@@ -409,7 +409,7 @@ class ModPackerDialog: BaseDialog(Core.bundle["dialog.modPacker.title"]) {
       it.add().growX()
       it.button(Icon.cancel, Styles.clearNonei, 32f){
         optionShow = false
-      }.margin(6f).visible { Core.graphics.isPortrait }
+      }.margin(6f).visible { Core.app.isMobile }
     }.color(Pal.gray).pad(0f)
     options.row()
     options.line(Pal.darkerGray, true, 4f).pad(0f).padBottom(4f)
@@ -553,7 +553,7 @@ class ModPackerDialog: BaseDialog(Core.bundle["dialog.modPacker.title"]) {
       it.add().growX()
       it.button(Icon.cancel, Styles.clearNonei, 32f){
         filesShow = false
-      }.margin(6f).visible { Core.graphics.isPortrait }
+      }.margin(6f).visible { Core.app.isMobile }
     }.color(Pal.gray).pad(0f)
     file.row()
     file.line(Pal.darkerGray, true, 3f).pad(0f).padBottom(4f)

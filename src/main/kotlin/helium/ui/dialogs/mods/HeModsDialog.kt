@@ -38,6 +38,7 @@ import helium.ui.dialogs.mods.ModsDialogHelper.buildStatus
 import helium.ui.dialogs.mods.ModsDialogHelper.getModList
 import helium.ui.dialogs.mods.ModsDialogHelper.setupContentsList
 import helium.ui.dialogs.mods.ModsDialogHelper.showDownloadModDialog
+import helium.ui.dialogs.mods.ModsDialogHelper.tryCompareVersion
 import helium.ui.elements.HeCollapser
 import helium.util.LOCAL_FILE
 import helium.util.ModStat
@@ -786,7 +787,10 @@ class HeModsDialog: AttachableDialog(
 
         if (modInfo == null) callback(UpdateEntry(mod, false, null))
         else {
-          if (modInfo.version != mod.meta.version) callback(UpdateEntry(mod, true, modInfo))
+          val isUpdate = mod.meta.version != modInfo.version
+                         && tryCompareVersion(mod.meta.version, modInfo.version) < 0
+
+          if (isUpdate) callback(UpdateEntry(mod, true, modInfo))
           else callback(UpdateEntry(mod, false, modInfo))
         }
       }

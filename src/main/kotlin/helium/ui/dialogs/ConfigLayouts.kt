@@ -15,6 +15,7 @@ import arc.scene.ui.layout.Table
 import arc.util.Strings
 import arc.util.Time
 import helium.invoke
+import helium.ui.HeAssets
 import helium.ui.UIUtils.line
 import helium.ui.dialogs.ModConfigDialog.ConfigLayout
 import helium.util.binds.CombinedKeys
@@ -66,7 +67,7 @@ abstract class ConfigEntry(name: String) : ConfigLayout(name) {
 
     if (tip != null) {
       table.addListener(Tooltip { ta ->
-        ta.add(
+        ta.table(HeAssets.darkGrayUIAlpha).margin(6f).get().add(
           tip!!.get()
         ).update { l: Label -> l.setText(tip!!.get()) }
       }.apply { allowMobile = true })
