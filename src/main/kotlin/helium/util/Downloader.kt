@@ -3,7 +3,6 @@ package helium.util
 import arc.Core
 import arc.files.Fi
 import arc.func.Cons
-import arc.func.ConsT
 import arc.graphics.Pixmap
 import arc.graphics.Texture
 import arc.graphics.g2d.TextureRegion
@@ -13,10 +12,31 @@ import arc.struct.OrderedMap
 import arc.util.Http
 import arc.util.Log
 import arc.util.io.Streams.OptimizedByteArrayOutputStream
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineName
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import java.io.OutputStream
 import kotlin.math.max
 
 object Downloader {
+  const val MAX_RETRY: Int = 5
+
+  private const val RETRY_DELAY_MS: Long = 250L
+  private const val BUFFER_SIZE: Int = 8192
+
+  private val scope: CoroutineScope = CoroutineScope(
+    SupervisorJob() + Dispatchers.IO + CoroutineName("helium-downloader")
+  )
+
   private val urlReplacers = OrderedMap<String, String>()
 
   fun setMirror(source: String, to: String) {
@@ -31,99 +51,204 @@ object Downloader {
     urlReplacers.clear()
   }
 
-  private fun retryDown(
-    url: String,
-    sync: Boolean,
-    resultHandler: ConsT<Http.HttpResponse, Exception>,
-    maxRetry: Int,
-    errHandler: Cons<Throwable>,
-  ) {
-    var url = url
-    var counter = 0
-    var get = {}
+  private fun mirrored(url: String): String {
+    var result = url
 
     for (entry in urlReplacers) {
-      if (url.startsWith(entry.key!!)) {
-        url = url.replaceFirst(entry.key!!.toRegex(), entry.value!!)
+      val from = entry.key ?: continue
+      if (result.startsWith(from)) result = result.replaceFirst(from.toRegex(), entry.value!!)
+    }
+
+    return result
+  }
+
+  private suspend fun <T> request(url: String, maxRetry: Int, handler: (Http.HttpResponse) -> T): T {
+    val realUrl = mirrored(url)
+    var last: Throwable? = null
+
+    for (attempt in 0..maxRetry) {
+      try {
+        return getRequest(realUrl, handler)
+      } catch (e: CancellationException) {
+        throw e
+      } catch (e: InterruptedException) {
+        throw e
+      } catch (e: Throwable) {
+        last = e
+        if (attempt < maxRetry) delay(RETRY_DELAY_MS * (attempt + 1))
       }
     }
 
-    val realUrl = url
-    get = if (sync) {{
-      Http.get(realUrl).error{ e ->
-        if (counter++ > maxRetry || e is InterruptedException) errHandler.get(e)
-        else get()
-      }.block(resultHandler)
-    }}
-    else {{
-      Http.get(realUrl, resultHandler){ e ->
-        if (counter++ > maxRetry || e is InterruptedException) errHandler.get(e)
-        else get()
-      }
-    }}
-    get()
+    throw last ?: IllegalStateException("download failed: $realUrl")
   }
 
-  fun downloadToStream(
+  private suspend fun <T> getRequest(url: String, handler: (Http.HttpResponse) -> T): T = withContext(Dispatchers.IO) {
+    var result: T? = null
+    var failure: Throwable? = null
+
+    Http.get(url).error { failure = it }.block { result = handler(it) }
+
+    failure?.let { throw it }
+
+    result ?: throw IllegalStateException("request returned no response: $url")
+  }
+
+  private fun copyBody(res: Http.HttpResponse, out: OutputStream, progressBack: Cons<Float>?, job: Job?) {
+    val input = res.resultAsStream ?: return
+    val total = res.contentLength
+    val buffer = ByteArray(BUFFER_SIZE)
+
+    var curr = 0L
+    while (true) {
+      job?.ensureActive()
+      if (Thread.currentThread().isInterrupted) throw InterruptedException()
+
+      val read = input.read(buffer)
+      if (read == -1) break
+
+      out.write(buffer, 0, read)
+      curr += read
+      progressBack?.get(curr.toFloat()/total)
+    }
+  }
+
+  private suspend fun <T> onAppThread(action: () -> T) = suspendCancellableCoroutine { cont ->
+    Core.app.post {
+      cont.resumeWith(runCatching(action))
+    }
+  }
+
+  private fun launchDownload(
+    errHandler: Cons<Throwable>?,
+    block: suspend CoroutineScope.() -> Unit
+  ): Job = scope.launch {
+    try {
+      block()
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Throwable) {
+      Log.err(e)
+      errHandler?.get(e)
+    }
+  }
+
+  suspend fun downloadToStream(
     url: String,
     stream: OutputStream,
-    sync: Boolean = false,
     progressBack: Cons<Float>? = null,
-    errHandler: Cons<Throwable>? = null,
-    completed: Runnable? = null
+    maxRetry: Int = MAX_RETRY,
   ) {
-    retryDown(url, sync, { res ->
-      stream.use {
-        val input = res.resultAsStream
-        val total = res.contentLength
+    val job = currentCoroutineContext()[Job]
 
-        var curr = 0
-        var b = input.read()
-        while (b != -1) {
-          if (Thread.interrupted())
-            throw InterruptedException()
-
-          curr++
-          stream.write(b)
-          progressBack?.get(curr.toFloat()/total)
-          b = input.read()
-        }
-
-        completed?.run()
+    stream.use { out ->
+      request(url, maxRetry) { res ->
+        copyBody(res, out, progressBack, job)
       }
-    }, 5, { th -> errHandler?.get(th) })
+    }
   }
 
-  fun downloadToFile(
+  suspend fun downloadToFile(
     url: String,
     file: Fi,
-    sync: Boolean = false,
     progressBack: Cons<Float>? = null,
-    errHandler: Cons<Throwable>? = null,
-    completed: Runnable? = null
-  ) {
-    downloadToStream(url, file.write(), sync, progressBack, errHandler, completed)
-  }
+    maxRetry: Int = MAX_RETRY,
+  ): Unit = downloadToStream(url, file.write(), progressBack, maxRetry)
 
-  fun downloadImg(
+  suspend fun downloadImg(
     url: String,
     errDef: TextureRegion,
-    sync: Boolean = false,
+    progressBack: Cons<Float>? = null,
+    maxRetry: Int = MAX_RETRY,
+    completed: Cons<TextureRegion>? = null,
+  ): TextureRegion {
+    val result = TextureRegion(errDef)
+
+    downloadInto(url, result, progressBack, maxRetry, completed)
+
+    return result
+  }
+
+  private suspend fun downloadInto(
+    url: String,
+    result: TextureRegion,
+    progressBack: Cons<Float>?,
+    maxRetry: Int,
+    completed: Cons<TextureRegion>?,
+  ) {
+    val job = currentCoroutineContext()[Job]
+
+    val bytes = request(url, maxRetry) { res ->
+      val out = OptimizedByteArrayOutputStream(max(0, res.contentLength).toInt())
+
+      out.use { copyBody(res, it, progressBack, job) }
+
+      out.toByteArray()
+    }
+
+    val pix = Pixmap(bytes)
+
+    onAppThread {
+      try {
+        val tex = Texture(pix)
+        tex.setFilter(Texture.TextureFilter.linear)
+        result.set(tex)
+
+        completed?.get(result)
+      } finally {
+        pix.dispose()
+      }
+    }
+  }
+
+  fun launchDownloadToStream(
+    url: String,
+    stream: OutputStream,
+    progressBack: Cons<Float>? = null,
+    errHandler: Cons<Throwable>? = null,
+    completed: Runnable? = null,
+  ): Job = launchDownload(errHandler) {
+    downloadToStream(url, stream, progressBack)
+    completed?.run()
+  }
+
+  fun launchDownloadToFile(
+    url: String,
+    file: Fi,
+    progressBack: Cons<Float>? = null,
+    errHandler: Cons<Throwable>? = null,
+    completed: Runnable? = null,
+  ): Job = launchDownload(errHandler) {
+    downloadToFile(url, file, progressBack)
+    completed?.run()
+  }
+
+  fun launchDownloadImg(
+    url: String,
+    errDef: TextureRegion,
     progressBack: Cons<Float>? = null,
     errHandler: Cons<Throwable>? = null,
     completed: Cons<TextureRegion>? = null,
   ): TextureRegion {
     val result = TextureRegion(errDef)
 
-    doDownloadImg(url, sync, progressBack, result, completed, errHandler)
+    startImgDownload(url, result, progressBack, errHandler, completed)
 
     return result
+  }
+
+  private fun startImgDownload(
+    url: String,
+    result: TextureRegion,
+    progressBack: Cons<Float>?,
+    errHandler: Cons<Throwable>?,
+    completed: Cons<TextureRegion>?,
+  ): Job = launchDownload(errHandler) {
+    downloadInto(url, result, progressBack, MAX_RETRY, completed)
   }
 
   fun downloadLazyImg(
     url: String,
     errDef: TextureRegion,
-    sync: Boolean = false,
     progressBack: Cons<Float>? = null,
     errHandler: Cons<Throwable>? = null,
     completed: Cons<TextureRegion>? = null,
@@ -131,19 +256,19 @@ object Downloader {
     val result = TextureRegion(errDef)
 
     return LazyRegionProv(result) {
-      doDownloadImg(url, sync, progressBack, result, completed, errHandler)
+      startImgDownload(url, result, progressBack, errHandler, completed)
     }
   }
 
   fun downloadLazyDrawable(
     url: String,
     errDef: TextureRegion,
-    sync: Boolean = false,
     progressBack: Cons<Float>? = null,
     errHandler: Cons<Throwable>? = null,
     completed: Cons<TextureRegion>? = null,
   ): Drawable {
-    val prov = downloadLazyImg(url, errDef, sync, progressBack, errHandler, completed)
+    val prov = downloadLazyImg(url, errDef, progressBack, errHandler, completed)
+
     return object: TextureRegionDrawable(prov.region){
       override fun draw(x: Float, y: Float, width: Float, height: Float) {
         prov.init()
@@ -151,57 +276,23 @@ object Downloader {
       }
     }
   }
-
-  private fun doDownloadImg(
-    url: String,
-    sync: Boolean,
-    progressBack: Cons<Float>?,
-    result: TextureRegion,
-    completed: Cons<TextureRegion>?,
-    errHandler: Cons<Throwable>?,
-  ) {
-    retryDown(url, sync, { res ->
-      val input = res.resultAsStream
-      val total = res.contentLength
-      val out = OptimizedByteArrayOutputStream(max(0, total).toInt())
-
-      out.use { stream ->
-        var curr = 0
-        var b = input.read()
-        while (b != -1) {
-          curr++
-          stream.write(b)
-          progressBack?.get(curr.toFloat()/total)
-          b = input.read()
-        }
-      }
-
-      val pix = Pixmap(out.toByteArray())
-      Core.app.post {
-        try {
-          val tex = Texture(pix)
-          tex.setFilter(Texture.TextureFilter.linear)
-          result.set(tex)
-          pix.dispose()
-
-          completed?.get(result)
-        } catch (e: Exception) {
-          Log.err(e)
-        }
-      }
-    }, 5, { th -> errHandler?.get(th) })
-  }
 }
 
 data class LazyRegionProv(
   val region: TextureRegion,
-  val downloader: Runnable
-){
-  private var done = false
+  val downloader: () -> Job,
+) {
+  private var job: Job? = null
 
-  fun init(){
-    if (done) return
-    downloader.run()
-    done = true
+  val started: Boolean get() = job != null
+
+  fun init() {
+    if (job != null) return
+
+    job = downloader()
+  }
+
+  fun cancel() {
+    job?.cancel()
   }
 }

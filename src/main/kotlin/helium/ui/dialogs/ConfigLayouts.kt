@@ -49,6 +49,10 @@ abstract class ConfigEntry(name: String) : ConfigLayout(name) {
   protected var tip: Prov<String>? = null
   protected var disabled = Boolp { false }
 
+  fun setDisabled(disabled: Boolp) = also { it.disabled = disabled }
+  fun setString(value: Prov<String>) = also { it.str = value }
+  fun setToolTip(value: Prov<String>) = also { it.tip = value }
+
   init {
     if (Core.bundle.has("settings.tip.$name")) {
       tip = Prov { Core.bundle["settings.tip.$name"] }
@@ -194,7 +198,7 @@ private fun openDialog(isCombine: Boolean, callBack: Cons<Array<KeyCode>>) {
   })
 
   rebindDialog.show()
-  Time.runTask(1f) { Core.scene.setScrollFocus(rebindDialog) }
+  Time.runTask(1f) { Core.scene.scrollFocus = rebindDialog }
 }
 
 class ConfigCheck(
@@ -306,7 +310,7 @@ class ConfigSlider : ConfigEntry {
       }.padRight(0f)
     }
     table.slider(min, max, step, curr.get(), slided).width(360f).padLeft(4f).update { s: Slider ->
-      s.setValue(curr.get())
+      s.value = curr.get()
       s.isDisabled = disabled.get()
     }
   }

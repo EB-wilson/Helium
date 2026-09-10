@@ -3,6 +3,7 @@ package helium.ui.fragments.entityinfo.displays
 import arc.Core
 import arc.graphics.Color
 import arc.graphics.g2d.Draw
+import arc.graphics.g2d.Fill
 import arc.graphics.g2d.Lines
 import arc.math.Interp
 import arc.math.Mathf
@@ -30,6 +31,7 @@ import mindustry.logic.Ranged
 import mindustry.ui.Styles
 import mindustry.world.blocks.defense.ForceProjector.ForceBuild
 import mindustry.world.blocks.defense.MendProjector.MendBuild
+import mindustry.world.blocks.defense.OverdriveProjector
 import mindustry.world.blocks.defense.OverdriveProjector.OverdriveBuild
 import mindustry.world.blocks.defense.turrets.BaseTurret.BaseTurretBuild
 import mindustry.world.blocks.units.RepairTower
@@ -129,6 +131,7 @@ class EntityRangeDisplay(
   var building: Building? = null
   var vis = 0f
   var range = 0f
+  var edges = -1
 
   var isUnit = false
   var isTurret = false
@@ -204,16 +207,34 @@ class EntityRangeDisplay(
         val inner = Interp.pow3.apply(r)
         val outer = Interp.pow3Out.apply(r)
 
-        DrawUtils.innerCircle(
-          entity.x, entity.y,
-          inner*radius, outer*radius,
-          Tmp.c1.set(Color.white).a(0f), Color.white, 1
-        )
+        if (edges == -1) {
+          DrawUtils.innerCircle(
+            entity.x, entity.y,
+            inner*radius, outer*radius,
+            Tmp.c1.set(Color.white).a(0f), Color.white, 1
+          )
+        }
+        else {
+          Draw.color()
+          DrawUtils.innerPoly(
+            entity.x, entity.y,
+            edges, inner*radius, 0f,
+            Tmp.c1.set(Color.white).a(0f), Color.white
+          )
+        }
       }
 
       Draw.z(layer + 0.003f)
       Lines.stroke(1f, Color.black)
-      DrawUtils.lineCircle(entity.x, entity.y, radius)
+      if (edges == -1) {
+        DrawUtils.lineCircle(entity.x, entity.y, radius)
+      }
+      else {
+        Lines.poly(
+          entity.x, entity.y,
+          edges, radius, 0f
+        )
+      }
     }?:run {
       val pos = Core.camera.position
       val dst = pos.dst(entity.x, entity.y)
@@ -223,11 +244,23 @@ class EntityRangeDisplay(
       Draw.z(layer)
       Lines.stroke(1f)
       Draw.color(color, color.a*rate)
-      DrawUtils.dashCircle(
-        entity.x, entity.y, radius,
-        8 + (radius/12).toInt(),
-        rotate = Time.time/radius*12 + timeOffset
-      )
+
+      if (edges == -1) {
+        DrawUtils.dashCircle(
+          entity.x, entity.y, radius,
+          8 + (radius/12).toInt(),
+          rotate = Time.time/radius*12 + timeOffset
+        )
+      }
+      else {
+        DrawUtils.dashPoly(
+          entity.x, entity.y,
+          edges, radius,
+          0.5f,
+          Time.time*2.2f + timeOffset,
+          8 + (radius/12).toInt()
+        )
+      }
     }
   }
 
@@ -235,7 +268,8 @@ class EntityRangeDisplay(
   var to = 0f
   override fun update(delta: Float, alpha: Float, isHovering: Boolean, isHolding: Boolean) {
     if (n++ >= 30) {
-      range = entity.range()
+      range = entity.getRange()
+      edges = entity.getEdges()
       to = building?.let {
         if (it.status() !== BlockStatus.noInput) 1f else 0f
       }?:1f
@@ -243,5 +277,16 @@ class EntityRangeDisplay(
       n = 0
     }
     if (!Mathf.equal(vis, to)) vis = Mathf.approach(vis, to, delta*0.04f)
+  }
+
+  private fun Ranged.getRange(): Float = when(this) {
+    // why?
+    is OverdriveBuild -> range()*phaseHeat*(block as OverdriveProjector).phaseRangeBoost
+    else -> range()
+  }
+
+  private fun Ranged.getEdges(): Int = when(this) {
+    is RepairTower.RepairTowerBuild -> 4
+    else -> -1
   }
 }

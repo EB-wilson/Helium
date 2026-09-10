@@ -42,6 +42,7 @@ import mindustry.Vars
 import mindustry.gen.Icon
 import mindustry.gen.Tex
 import mindustry.graphics.Pal
+import mindustry.ui.FileChooser
 import mindustry.ui.Styles
 import mindustry.ui.dialogs.BaseDialog
 import universe.ui.markdown.Markdown
@@ -344,7 +345,7 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
         Core.app.clipboardText = mods.toString()
       },
       ButtonEntry(Core.bundle["misc.save"], Icon.file) {
-        Vars.platform.showFileChooser(false, "zip") { f ->
+        FileChooser.save("zip").submit { f ->
           f.writer(false).write(mods.toString())
         }
       }

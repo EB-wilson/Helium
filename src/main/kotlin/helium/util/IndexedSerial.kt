@@ -43,11 +43,16 @@ class IndexedSerial<T: SerialObject>(
     array = array.copyOf(size)
   }
 
-  fun add(obj: T) {
+  fun add(obj: T): Boolean {
+    val last = obj.indexes[indexOrder]
+    if (last >= 0 && array[last] == obj) return false
+
     checkGrow(size + 1)
     obj.indexes[indexOrder] = size
     array[size] = obj
     size++
+
+    return true
   }
 
   fun insert(index: Int, obj: T) {
@@ -75,10 +80,11 @@ class IndexedSerial<T: SerialObject>(
     size++
   }
 
-  fun remove(obj: T): T? {
+  fun remove(obj: T): Boolean {
     val index = obj.indexes[indexOrder]
-    val removed = array[index]?:return null
-    if (isEmpty() || index !in 0..<size || removed != obj) return null
+    if (index < 0) return false
+    val removed = array[index]?: return false
+    if (isEmpty() || index !in 0..<size || removed != obj) return false
 
     size--
     val tail = array[size]!!
@@ -86,7 +92,7 @@ class IndexedSerial<T: SerialObject>(
     array[index] = tail
     tail.indexes[indexOrder] = index
 
-    return removed
+    return true
   }
 
   fun removeOrdered(obj: T): T? {

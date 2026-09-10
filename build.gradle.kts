@@ -8,6 +8,7 @@ import java.util.jar.JarOutputStream
 
 val mindustryVersion = properties["mindustryVersion"]
 val arcVersion = properties["arcVersion"]
+val unkVersion = properties["unkVersion"]
 
 val modOutputDir = properties["modOutputDir"] as? String
 val debugJarDir = properties["debugGamePath"] as? String
@@ -29,15 +30,15 @@ version = properties["version"] as String
 run { "java SyncBundles.java $version".execute() }
 
 java {
-  sourceCompatibility = JavaVersion.VERSION_1_8
-  targetCompatibility = JavaVersion.VERSION_1_8
+  sourceCompatibility = JavaVersion.VERSION_17
+  targetCompatibility = JavaVersion.VERSION_17
 }
 
 kotlin {
   jvmToolchain(21)
 
   compilerOptions {
-    jvmTarget.set(JvmTarget.JVM_1_8)
+    jvmTarget.set(JvmTarget.JVM_17)
   }
 }
 
@@ -57,19 +58,21 @@ repositories {
   mavenLocal()
   mavenCentral()
   maven ("https://maven.xpdustry.com/mindustry")
-  maven ("https://www.jitpack.io")
+  maven { url = uri("https://raw.githubusercontent.com/Zelaux/MindustryRepo/master/repository") }
+  maven { url = uri("https://www.jitpack.io") }
 }
 
 dependencies {
   compileOnly("com.github.Anuken.Arc:arc-core:$arcVersion")
   compileOnly("com.github.Anuken.Mindustry:core:$mindustryVersion")
 
-  implementation("com.github.EB-wilson.UniverseKit:utilities:1.2")
-  implementation("com.github.EB-wilson.UniverseKit:graphic:1.2")
-  implementation("com.github.EB-wilson.UniverseKit:reflection:1.2")
-  implementation("com.github.EB-wilson.UniverseKit:markdown:1.2")
+  implementation("com.github.EB-wilson.UniverseKit:utilities:$unkVersion")
+  implementation("com.github.EB-wilson.UniverseKit:graphic:$unkVersion")
+  implementation("com.github.EB-wilson.UniverseKit:reflection:$unkVersion")
+  implementation("com.github.EB-wilson.UniverseKit:markdown:$unkVersion")
 
   implementation(kotlin("stdlib-jdk8"))
+  implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
 
   testImplementation("com.github.Anuken.Arc:arc-core:${arcVersion}")
   testImplementation("com.github.Anuken.Mindustry:core:${mindustryVersion}")
@@ -215,19 +218,23 @@ tasks {
   }
 }
 
-fun String.execute(path: File? = null, vararg args: Any?): Process{
-  val cmd = split(Regex("\\s+"))
-    .toMutableList()
-    .apply { addAll(args.map { it?.toString()?:"null" }) }
-    .toTypedArray()
-  val process = ProcessBuilder(*cmd)
-    .directory(path?:rootDir)
-    .redirectOutput(ProcessBuilder.Redirect.INHERIT)
-    .redirectError(ProcessBuilder.Redirect.INHERIT)
+fun String.execute(path: File? = null, vararg args: Any?): Process {
+  val cmd = split(Regex("\\s+")).filter { it.isNotEmpty() }.toMutableList()
+    .apply { addAll(args.map { it?.toString() ?: "null" }) }
+
+  val process = ProcessBuilder(cmd)
+    .directory(path ?: rootDir)
+    .redirectErrorStream(true)
     .start()
 
-  if (process.waitFor() != 0) throw Error(InputStreamReader(process.errorStream).readText())
+  val output = StringBuilder()
+  process.inputStream.bufferedReader().forEachLine {
+    output.appendLine(it)
+    logger.lifecycle("[${cmd.first()}] $it")
+  }
 
+  val code = process.waitFor()
+  if (code != 0) throw Error("exit=$code\n$output")
   return process
 }
 

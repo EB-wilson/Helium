@@ -7,6 +7,7 @@ import arc.func.Cons2
 import arc.util.serialization.Jval
 import main.PackModel.Type.*
 import mindustry.Vars
+import mindustry.ui.FileChooser
 import java.io.IOException
 import java.text.DateFormat
 import java.util.*
@@ -38,7 +39,7 @@ object ModpackUtil {
 
     if (model.type != Distribute) {
       if (model.rawBackup) {
-        Vars.platform.showFileChooser(false, "zip") { f ->
+        FileChooser.save("zip").submit { f: Fi ->
           backup.moveTo(f)
         }
       }

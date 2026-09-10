@@ -50,6 +50,7 @@ import mindustry.gen.Icon
 import mindustry.gen.Tex
 import mindustry.graphics.Pal
 import mindustry.mod.Mods
+import mindustry.ui.FileChooser
 import mindustry.ui.Styles
 import universe.ui.dialogs.AttachableDialog
 import universe.ui.markdown.Markdown
@@ -647,7 +648,7 @@ class HeModsDialog: AttachableDialog(
   }
 
   private fun importFile() {
-    Vars.platform.showMultiFileChooser({ file ->
+    FileChooser.open("zip", "jar").submit { file ->
       try {
         Vars.mods.importMod(file)
         modTabs.clear()
@@ -658,7 +659,7 @@ class HeModsDialog: AttachableDialog(
           e, if (e.message != null && e.message!!.lowercase().contains("writable dex")) "@error.moddex" else ""
         )
       }
-    }, "zip", "jar")
+    }
   }
 
   private fun deleteMod(mod: Mods.LoadedMod) {

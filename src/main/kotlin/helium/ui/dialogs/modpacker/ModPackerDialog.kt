@@ -42,6 +42,7 @@ import mindustry.gen.Icon
 import mindustry.gen.Tex
 import mindustry.graphics.Pal
 import mindustry.type.Planet
+import mindustry.ui.FileChooser
 import mindustry.ui.Styles
 import mindustry.ui.dialogs.BaseDialog
 import mindustry.ui.dialogs.LoadDialog
@@ -368,7 +369,7 @@ class ModPackerDialog: BaseDialog(Core.bundle["dialog.modPacker.title"]) {
 
     ModpackStat.apply {
       if (stat.isCorrect()) {
-        Vars.platform.showFileChooser(false, Core.bundle["dialog.modPacker.options"], "zip") { file ->
+        FileChooser.save("zip").title(Core.bundle["dialog.modPacker.options"]).submit { file ->
           ModpackUtil.genFile(model, file)
           UIUtils.showTip(Core.bundle["misc.complete"], Core.bundle["dialog.modPacker.completed"])
         }
@@ -386,20 +387,19 @@ class ModPackerDialog: BaseDialog(Core.bundle["dialog.modPacker.title"]) {
   }
 
   private fun openModpack() {
-    Vars.platform.showMultiFileChooser(
-      { file ->
-        val new = PackModel()
-        initModel(new)
+    FileChooser.open("zip", "jar").submit { file ->
+      val new = PackModel()
+      initModel(new)
 
-        try {
-          ModpackUtil.readModpackFile(new, file)
-        } catch (e: Exception){
-          UIUtils.showException(e)
-        }
+      try {
+        ModpackUtil.readModpackFile(new, file)
+      } catch (e: Exception){
+        UIUtils.showException(e)
+      }
 
-        model = new
-        rebuild()
-      }, "zip", "jar")
+      model = new
+      rebuild()
+    }
   }
 
   private fun buildOptions(options: Table) {
@@ -437,17 +437,16 @@ class ModPackerDialog: BaseDialog(Core.bundle["dialog.modPacker.title"]) {
         }.color(Pal.darkerGray).margin(4f).left().get().also { img ->
           img.addListener(HandCursorListener())
           img.clicked {
-            Vars.platform.showMultiFileChooser(
-              { file ->
-                try {
-                  val tst = Texture(file)
-                  if (tst.width != tst.height) throw RuntimeException("width must equal height")
+            FileChooser.open("png", "jpg").submit { file ->
+              try {
+                val tst = Texture(file)
+                if (tst.width != tst.height) throw RuntimeException("width must equal height")
 
-                  model.icon = file
-                } catch (e: Throwable) {
-                  UIUtils.showException(e, Core.bundle["dialog.modPacker.imageError"])
-                }
-              }, ".png", ".jpg")
+                model.icon = file
+              } catch (e: Throwable) {
+                UIUtils.showException(e, Core.bundle["dialog.modPacker.imageError"])
+              }
+            }
           }
         }
         tab.row()
@@ -722,7 +721,7 @@ class ModPackerDialog: BaseDialog(Core.bundle["dialog.modPacker.title"]) {
   }
 
   private fun selectCustomFile() {
-    Vars.platform.showFileChooser(true, "*") { f ->
+    FileChooser.open("*").submit { f ->
       if (!model.fileEntries.contains { it.fi == f }) {
         model.fileEntries.add(
           PackModel.FileEntry(f)

@@ -70,7 +70,7 @@ class HeConfig(configDir: Fi, internalSource: Fi) {
     set(value){ field = value; He.placement.rebuildCategory() }
 
   @ConfigItem var enableBetterModsDialog = true
-    set(value){ He.heModsDialog.enabled = value }
+    set(value){ field = value; He.heModsDialog.enabled = value }
 
   fun load() {
     if (!configFile.exists()) {

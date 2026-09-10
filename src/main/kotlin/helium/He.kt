@@ -5,8 +5,13 @@ import arc.Events
 import arc.Settings
 import arc.files.Fi
 import arc.func.*
+import arc.graphics.g2d.Draw
+import arc.graphics.g2d.Fill
+import arc.math.Mathf
 import arc.scene.Element
 import arc.scene.event.SceneEvent
+import arc.scene.style.BaseDrawable
+import arc.scene.ui.Dialog
 import arc.scene.ui.layout.Table
 import arc.struct.IntMap
 import arc.struct.ObjectFloatMap
@@ -31,7 +36,9 @@ import mindustry.game.EventType
 import mindustry.gen.Icon
 import mindustry.graphics.Pal
 import mindustry.ui.Styles
+import mindustry.ui.dialogs.BaseDialog
 import mindustry.ui.dialogs.SettingsMenuDialog
+import universe.graphic.MathShader
 
 object He {
   private val settingsMenu = SettingsMenuDialog::class.java.getDeclaredField("menu")
@@ -162,6 +169,36 @@ object He {
     placement.build(Vars.ui.hudGroup)
     hoveringInfo.build(Vars.ui.hudGroup)
     entityInfo.build(Vars.ui.hudGroup)
+
+    BaseDialog("").apply {
+      addCloseButton()
+
+      cont.image(object: BaseDrawable(){
+        val shader = MathShader.curveCircleShader
+        val radius = shader.getUniform("radius")
+        val curvature = shader.getUniform("curvature")
+        val roundScl = shader.getUniform("roundScale")
+
+        init {
+          radius.set(1f)
+          roundScl.set(8f)
+        }
+
+        override fun draw(x: Float, y: Float, width: Float, height: Float) {
+          curvature.set(Mathf.sin(10f, 0.05f))
+          shader.draw(
+            0.3f,
+            0.92f,
+            0.99f,
+            1.4f,
+            1.4f,
+          ){
+            Draw.rect(it, x + width/2, y + height/2, width*1.4f, height*1.4f, Time.globalTime/2f)
+            Draw.rect(it, x + width/2, y + height/2, width*1.3f, height*1.3f, -Time.globalTime/2f)
+          }
+        }
+      }).size(800f, 800f)
+    }.show()
   }
 
   private fun genGlobal() = object : Settings() {
@@ -233,8 +270,6 @@ object He {
   private fun setupGlobalListeners() {
     Events.run(EventType.Trigger.update) { update() }
     Events.run(EventType.Trigger.draw) { drawWorld() }
-
-    //Events.on(EventType.ResetEvent::class.java) { entityInfo.reset() }
   }
 
   private fun setupDisplays(infos: EntityInfoFrag) {
@@ -266,17 +301,17 @@ object He {
         "blurLevel",
         config::blurLevel,
         1, 8, 1
-      ),
+      ).setDisabled{ !config.enableBlur },
       ConfigSlider(
         "blurScl",
         config::blurScl,
         1, 8, 1
-      ),
+      ).setDisabled{ !config.enableBlur },
       ConfigSlider(
         "blurSpace",
         config::blurSpace,
         0.5f, 8f, 0.25f
-      ),
+      ).setDisabled{ !config.enableBlur },
 
       ConfigSepLine(
         "entityInfo",
@@ -285,35 +320,35 @@ object He {
         Pal.accentBack
       ),
       ConfigCheck(
-        "fixedHoveringInfoPane",
-        config::fixedHoveringInfoPane
-      ),
-      ConfigSlider(
-        "entityInfoScale",
-        config::entityInfoScale,
-        0.5f, 2f, 0.1f
-      ),
-      ConfigSlider(
-        "entityInfoAlpha",
-        config::entityInfoAlpha,
-        0.4f, 1f, 0.05f
-      ),
-      ConfigCheck(
         "enableEntityInfoDisplay",
         config::enableEntityInfoDisplay
       ),
       ConfigCheck(
+        "fixedHoveringInfoPane",
+        config::fixedHoveringInfoPane
+      ).setDisabled{ !config.enableEntityInfoDisplay },
+      ConfigSlider(
+        "entityInfoScale",
+        config::entityInfoScale,
+        0.5f, 2f, 0.1f
+      ).setDisabled{ !config.enableEntityInfoDisplay },
+      ConfigSlider(
+        "entityInfoAlpha",
+        config::entityInfoAlpha,
+        0.4f, 1f, 0.05f
+      ).setDisabled{ !config.enableEntityInfoDisplay },
+      ConfigCheck(
         "enableHealthBarDisplay",
         config::enableHealthBarDisplay
-      ),
+      ).setDisabled{ !config.enableEntityInfoDisplay },
       ConfigCheck(
         "enableUnitStatusDisplay",
         config::enableUnitStatusDisplay
-      ),
+      ).setDisabled{ !config.enableEntityInfoDisplay },
       ConfigCheck(
         "enableRangeDisplay",
         config::enableRangeDisplay
-      ),
+      ).setDisabled{ !config.enableEntityInfoDisplay },
       ConfigSlider(
         "rangeRenderLevel",
         config::rangeRenderLevel,
@@ -322,23 +357,23 @@ object He {
         0 -> Core.bundle["range.animate.full"]
         1 -> Core.bundle["range.animate.simplified"]
         else -> Core.bundle["range.animate.prof"]
-      } },
+      } }.setDisabled{ !config.enableEntityInfoDisplay },
       ConfigCheck(
         "enableAttackAngleDisplay",
         config::enableAttackAngleDisplay
-      ),
+      ).setDisabled{ !config.enableEntityInfoDisplay },
       ConfigCheck(
         "showAttackRange",
         config::showAttackRange
-      ),
+      ).setDisabled{ !config.enableEntityInfoDisplay },
       ConfigCheck(
         "showHealRange",
         config::showHealRange
-      ),
+      ).setDisabled{ !config.enableEntityInfoDisplay },
       ConfigCheck(
         "showOverdriveRange",
         config::showOverdriveRange
-      ),
+      ).setDisabled{ !config.enableEntityInfoDisplay },
 
       ConfigSepLine(
         "placement",
@@ -354,7 +389,7 @@ object He {
         "blockColumns",
         config::blockColumns,
         4, 8, 1
-      ),
+      ).setDisabled{ !config.enableBetterPlacement },
 
       ConfigSepLine(
         "modsDialog",

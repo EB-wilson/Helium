@@ -157,6 +157,31 @@ object DrawUtils {
     Draw.vert(Core.atlas.white().texture, vertices, 0, vertices.size);
   }
 
+  fun innerPoly(x: Float, y: Float, sides: Int, radius: Float, rotation: Float, innerColor: Color, color: Color) {
+    val c1 = innerColor.toFloatBits()
+    val c2 = color.toFloatBits()
+
+    val step = 360f/sides
+
+    for (i in 0 until sides) {
+      val angle1 = i*step + rotation
+      val angle2 = (i + 1)*step + rotation
+      val off1 = Mathf.cosDeg(angle1)
+      val off2 = Mathf.sinDeg(angle2)
+      val dx1 = x + off1 * radius
+      val dy1 = y + off1 * radius
+      val dx2 = x + off2 * radius
+      val dy2 = y + off2 * radius
+
+      Fill.quad(
+        x, y, c1,
+        x, y, c1,
+        dx1, dy1, c2,
+        dx2, dy2, c2,
+      )
+    }
+  }
+
   fun lineCircle(x: Float, y: Float, radius: Float, level: Int = 2){
     val stroke = Lines.getStroke()
     val color = Draw.getColorPacked()
@@ -247,6 +272,31 @@ object DrawUtils {
         dashDeg/360f, rotate + i*step,
         sides
       )
+    }
+  }
+
+  fun dashPoly(
+    x: Float, y: Float, edges: Int,
+    radius: Float, rotation: Float,
+    dashOffset: Float, dashes: Int,
+  ) {
+
+  }
+
+  fun flowDashLine(
+    x1: Float, y1: Float,
+    x2: Float, y2: Float,
+    dashOffset: Float, dashes: Int
+  ) {
+    val len = Mathf.dst(x1, y1, x2, y2)
+    val step = len/dashes
+    val half = step/2f
+
+    val offsetMod = dashOffset%step
+
+    for (i in 0 until dashes) {
+      val from = i*step + offsetMod
+      val to = from + half
     }
   }
 

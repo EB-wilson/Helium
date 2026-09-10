@@ -52,6 +52,7 @@ import java.util.Date
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Future
 import kotlin.jvm.Throws
+import kotlinx.coroutines.Job
 
 object ModsDialogHelper {
   private val exec: ExecutorService = Threads.unboundedExecutor("HTTP", 1)
@@ -398,6 +399,7 @@ object ModsDialogHelper {
     var complete = false
     var downloading = false
     var task: Future<*>? = null
+    var download: Job? = null
 
     val loaded = Vars.mods.getMod(modInfo.internalName)
     val isUpdate =
@@ -408,7 +410,7 @@ object ModsDialogHelper {
     fun buildContent(content: Table) {
       val repoStr = modInfo.repo.replace("/", "_")
       val iconLink = "https://raw.githubusercontent.com/EB-wilson/HeMindustryMods/master/icons/$repoStr"
-      val image = Downloader.downloadImg(iconLink, Core.atlas.find("nomap"))
+      val image = Downloader.launchDownloadImg(iconLink, Core.atlas.find("nomap"))
 
       content.table(HeAssets.darkGrayUIAlpha) { cont ->
         cont.table(Tex.buttonSelect) { icon ->
@@ -472,6 +474,7 @@ object ModsDialogHelper {
         Icon.cancel
       ) {
         task?.cancel(true)
+        download?.cancel()
         it.hide()
       },
       ButtonEntry(
@@ -516,11 +519,10 @@ object ModsDialogHelper {
               }
 
               val fi = Vars.modDirectory.child("tmp").child(modInfo.internalName + suffix)
-              Downloader.downloadToFile(
-                url, fi, true,
+              download = Downloader.launchDownloadToFile(
+                url, fi,
                 { p -> progress = p },
                 { e ->
-                  if (e is InterruptedException) return@downloadToFile
                   Log.err(e)
                   Core.app.post {
                     UIUtils.showException(e, Core.bundle["dialog.mods.downloadFailed"])

@@ -182,14 +182,28 @@ class EntityInfoFrag {
     providers.forEach {
       val groups = it.targetGroup()
       if (groups.contains(TargetGroup.all) ) {
-        TargetGroup.all.apply(::addEntry, ::removeEntry, ::clearEntry)
+        TargetGroup.all.apply(
+          ::addEntry,
+          { e ->
+            removeEntry(e, false)
+            removeEntry(e, true)
+          },
+          ::clearEntry
+        )
         return
       }
       else groups.forEach { group -> targets.add(group) }
     }
 
     targets.forEach {
-      it.apply(::addEntry, ::removeEntry, ::clearEntry)
+      it.apply(
+        ::addEntry,
+        { e ->
+          removeEntry(e, false)
+          removeEntry(e, true)
+        },
+        ::clearEntry
+      )
     }
   }
 
@@ -513,9 +527,10 @@ class EntityInfoFrag {
         hoveringEntries[entity.id()] = entry
         hoveringList.add(entry)
       }
-
-      entityEntries[entity.id()] = entry
-      entriesList.add(entry)
+      else {
+        entityEntries[entity.id()] = entry
+        entriesList.add(entry)
+      }
 
       return entry
     }
@@ -523,17 +538,23 @@ class EntityInfoFrag {
     return null
   }
   fun removeEntry(entity: Entityc, hovering: Boolean = false) {
-    var ent = entityEntries.remove(entity.id())
     if (hovering) {
-      hoveringEntries.remove(entity.id())?.also { if (ent == null) ent = it }
+      hoveringEntries.remove(entity.id())?.let { hov ->
+        hoveringList.remove(hov)
+
+        hov.displays.forEach { display ->
+          if (display is InputEventChecker) display.element.remove()
+        }
+      }
     }
-    if (ent == null) return
+    else {
+      entityEntries.remove(entity.id())?.let { ent ->
+        entriesList.remove(ent)
 
-    entriesList.remove(ent)
-    if (hovering) hoveringList.remove(ent)
-
-    ent.displays.forEach { display ->
-      if (display is InputEventChecker) display.element.remove()
+        ent.displays.forEach { display ->
+          if (display is InputEventChecker) display.element.remove()
+        }
+      }
     }
   }
 
@@ -556,6 +577,10 @@ class EntityInfoFrag {
   }
 
   fun clearEntry() {
+    hoveringList.forEach { Pools.free(it) }
+    hoveringList.clear()
+    hoveringEntries.clear()
+
     entriesList.forEach { Pools.free(it) }
     entriesList.clear()
     entityEntries.clear()
@@ -600,7 +625,7 @@ class EntityInfoFrag {
       }
     }
 
-    entriesList.forEach { e ->
+    (entriesList + hoveringList).forEach { e ->
       if (!e.inFog && e.holding) {
         val rad = e.size*1.44f
         val ent = e.entity
@@ -767,7 +792,7 @@ class EntityInfoFrag {
   private fun update(delta: Float) {
     val alpha = config.entityInfoAlpha
     val playerTeam = Vars.player.team()
-    entriesList.forEach { ent ->
+    (entriesList + hoveringList).forEach { ent ->
       val inFog = ent.entity.inFogTo(playerTeam)
       ent.inFog = inFog
       if (inFog) return@forEach
@@ -784,7 +809,7 @@ class EntityInfoFrag {
 
     Draw.sort(true)
 
-    entriesList.forEach { e ->
+    (entriesList + hoveringList).forEach { e ->
       if (e.inFog) return@forEach
       var offsetLeft = 0f
       var offsetRight = 0f

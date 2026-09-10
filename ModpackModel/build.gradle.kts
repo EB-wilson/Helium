@@ -22,15 +22,15 @@ plugins {
 run { "java ../SyncBundles.java $version".execute(projectDir) }
 
 java {
-  sourceCompatibility = JavaVersion.VERSION_1_8
-  targetCompatibility = JavaVersion.VERSION_1_8
+  sourceCompatibility = JavaVersion.VERSION_17
+  targetCompatibility = JavaVersion.VERSION_17
 }
 
 kotlin {
   jvmToolchain(21)
 
   compilerOptions {
-    jvmTarget.set(JvmTarget.JVM_1_8)
+    jvmTarget.set(JvmTarget.JVM_17)
   }
 }
 
@@ -38,7 +38,8 @@ repositories {
   mavenLocal()
   mavenCentral()
   maven ("https://maven.xpdustry.com/mindustry")
-  maven ("https://www.jitpack.io")
+  maven { url = uri("https://raw.githubusercontent.com/Zelaux/MindustryRepo/master/repository") }
+  maven { url = uri("https://www.jitpack.io") }
 }
 
 dependencies {
