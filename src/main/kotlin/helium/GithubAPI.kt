@@ -1,84 +1,70 @@
 package helium
 
 import arc.Core
+import arc.files.Fi
 import arc.func.Cons
 import arc.func.ConsT
 import arc.util.Http
 import arc.util.Log
 import arc.util.Timer
 import arc.util.serialization.Jval
+import helium.util.SecureStore
 import java.net.URLEncoder
+import java.nio.ByteBuffer
 import kotlin.math.max
 
-/**
- * GitHub 账号与仓库星标（Star）接口。
- *
- * ### 登录方式：OAuth 2.0 Device Flow（设备码流程）
- * 用户点击登录后，本模块会：
- *  1. 向 GitHub 申请一次性设备码与用户码；
- *  2. 用 [Core.app.openURI] 唤起系统浏览器打开 GitHub 官方认证页（[DEVICE_VERIFY_URL]）；
- *  3. 把 [DeviceLogin.userCode] 交给界面展示，用户在网页上填入并授权；
- *  4. 轮询换取当前会话的 access token，再拉取用户资料，得到 [GithubUser]。
- *
- * 设备码流程不需要 client_secret，也不需要本地回调端口，适合桌面/移动端内嵌场景。
- *
- * ### 线程约定
- * - 登录、会话恢复、星标列表、单仓库星标查询、退出登录的回调（[Cons]）**均在游戏主线程执行**。
- * - 底层 [star]、[unstar]、[authGET]、[authPOST]、[authRequest] 保留原始行为，
- *   回调在 HTTP 线程执行；若要更新界面请自行 `Core.app.post { }`。
- */
+
 object GithubAPI {
+  private const val SESSION_RECORD_VERSION: Byte = 1
+  private const val SESSION_RECORD_HEADER = 30
+  private const val SESSION_IDLE_TIMEOUT_MS = 24L * 60 * 60 * 1000
+  private const val SESSION_MAX_AGE_MS = 30L * 24 * 60 * 60 * 1000
+  private const val TOKEN_REFRESH_SKEW_MS = 5L * 60 * 1000
+  private const val LAST_USED_WRITE_INTERVAL_MS = 60L * 1000
+
   const val GITHUB_API = "https://api.github.com"
 
-  /** OAuth App 的设备码申请地址。 */
   const val DEVICE_CODE_API = "https://github.com/login/device/code"
-  /** OAuth App 的设备码换取 token 地址。 */
   const val ACCESS_TOKEN_API = "https://github.com/login/oauth/access_token"
-  /** 需要唤起浏览器打开的 GitHub 官方认证页，用户在此填入用户码并登录授权。 */
   const val DEVICE_VERIFY_URL = "https://github.com/login/device"
 
-  /** mod 仓库在 GitHub 上约定的 topic，用于从用户的星标里筛出「mod 收藏」。 */
   const val MOD_TOPIC = "mindustry-mod"
 
-  /** 需要的权限：读取账号资料 + 对公开仓库标星/取消标星。 */
+  /** classic OAuth App 默认请求的 scope。*/
   const val SCOPE = "read:user public_repo"
 
-  /**
-   * OAuth App 的 Client ID（注意不是 client secret，设备码流程不需要 secret）。
-   *
-   * 申请步骤：
-   *  1. 打开 <https://github.com/settings/applications/new>；
-   *  2. `Application name` / `Homepage URL` 随意填写，`Authorization callback URL` 也可随意填一个 https 地址
-   *     （设备码流程不会使用回调地址）；
-   *  3. 创建后进入该 App 详情页，勾选 **Enable Device Flow** 并保存；
-   *  4. 把页面上的 Client ID 填到这里，或在游戏内写入全局配置项 `github-client-id`。
-   */
-  const val DEFAULT_CLIENT_ID = ""
+  const val DEFAULT_CLIENT_ID = "Ov23licXN5NAlcbFfaKI"
 
   private const val CLIENT_ID_KEY = "github-client-id"
-  private const val TOKEN_KEY = "github-token"
+  private const val SCOPE_KEY = "github-scope"
+
   private const val PAGE_SIZE = 100
   private const val USER_AGENT = "Helium-Mindustry-Mod"
   private const val API_VERSION = "2022-11-28"
   private const val DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
+  private const val REFRESH_GRANT = "refresh_token"
+
+  private const val SESSION_SECRET_ID = "github.session"
 
   private const val USER_AUTH_API = "$GITHUB_API/user"
   private const val STAR_API = "$GITHUB_API/user/starred"
 
-  /** 登录状态机，供界面判断当前应展示登录按钮还是账号信息。 */
   enum class LoginState {
-    /** 未登录 */
     LoggedOut,
-    /** 已唤起浏览器，等待用户在网页上完成授权 */
     Waiting,
-    /** 已登录，[currUser] 可用 */
     LoggedIn,
-    /** 上一次登录失败，可重新调用 [startLogin] */
     Failed,
   }
 
+  private val refreshLock = Any()
+
   @Volatile
   private var githubUser: GithubUser? = null
+
+  @Volatile
+  private var refreshing = false
+
+  private val refreshWaiters = ArrayList<Pair<Cons<Throwable>, () -> Unit>>()
 
   @Volatile
   private var loginState: LoginState = LoginState.LoggedOut
@@ -92,10 +78,6 @@ object GithubAPI {
   private var pollInterval = 5
   private var deviceExpireAt = 0L
 
-  // ---------------------------------------------------------------------------------------------
-  // 状态查询（供界面/收藏夹实现读取）
-  // ---------------------------------------------------------------------------------------------
-
   /** @return 当前登录用户，未登录时为 null */
   fun currUser(): GithubUser? = githubUser
 
@@ -108,62 +90,105 @@ object GithubAPI {
   /** @return 正在等待授权的设备码信息；界面可据此展示用户码与认证链接 */
   fun pendingDevice(): DeviceLogin? = device
 
-  /** @return 本地保存的 access token，未保存时为空串 */
-  fun savedToken(): String = He.global.getString(TOKEN_KEY, "") ?: ""
+  fun clientId(): String = He.global.getString(CLIENT_ID_KEY, DEFAULT_CLIENT_ID)
 
-  /** @return 实际使用的 OAuth App Client ID（全局配置优先，其次 [DEFAULT_CLIENT_ID]） */
-  fun clientId(): String = (He.global.getString(CLIENT_ID_KEY, "") ?: "").ifBlank { DEFAULT_CLIENT_ID }
+  /** @return 设备码请求里携带的 scope。*/
+  fun scope(): String = He.global.getString(SCOPE_KEY, SCOPE)
 
   /** @return 是否已配置 Client ID；未配置时 [startLogin] 会直接失败 */
   fun hasClientId(): Boolean = clientId().isNotBlank()
 
-  // ---------------------------------------------------------------------------------------------
-  // 登录 / 会话
-  // ---------------------------------------------------------------------------------------------
+  fun init(onRestored: Cons<Boolean> = Cons{}) {
+    restoreSession(onRestored)
+  }
 
-  /**
-   * 游戏启动时调用：若本地存有 token 则静默恢复登录态。
-   * @param onRestored 主线程回调，参数为是否恢复成功
-   */
-  fun init(onRestored: Cons<Boolean> = Cons{}) = restoreSession(onRestored)
-
-  /**
-   * 恢复上次保存的会话：用本地 token 拉取用户资料校验。
-   * token 缺失或已失效时回调 false，并清空本地 token。
-   * @param onRestored 主线程回调
-   */
   fun restoreSession(onRestored: Cons<Boolean> = Cons{}) {
-    val token = savedToken()
-    if (token.isBlank()) {
+    val stored = loadSession()
+    if (stored == null) {
       loginState = LoginState.LoggedOut
       onMain { onRestored.get(false) }
       return
     }
 
-    fetchUser(
-      token = token,
-      onError = { error ->
-        Log.warn("a github token has been set, but login failed, the token may have expired. error: ${error.message}")
-        logout()
-        onRestored.get(false)
-      },
-      onSuccess = { user ->
-        githubUser = user
-        loginState = LoginState.LoggedIn
-        Log.info("github session restored as @", user.login)
-        onRestored.get(true)
-      }
-    )
+    if (!stored.isWithinPolicy()) {
+      Log.info("stored github session is out of policy (idle > 24h or older than 30d), a new login is required")
+      stored.close()
+      discardSession()
+      onMain { onRestored.get(false) }
+      return
+    }
+
+    if (stored.needsRefresh() && stored.refreshToken != null) {
+      synchronized(refreshLock) { refreshing = true }
+
+      refreshSession(
+        record = stored,
+        onError = { error ->
+          // 凭据是否需要清除由 refreshSession 判定（只有被 GitHub 明确拒绝才清），
+          // 这里只回落到未登录，避免网络抖动把用户登出
+          Log.warn("stored github session could not be refreshed. error: ${error.message}")
+          githubUser = null
+          loginState = LoginState.LoggedOut
+          onMain { onRestored.get(false) }
+        }
+      ) { verifyRestoredSession(onRestored) }
+
+      stored.close()
+      return
+    }
+
+    verifyRestoredSession(onRestored)
+    stored.close()
+  }
+
+  private fun verifyRestoredSession(onRestored: Cons<Boolean>) {
+    try {
+      fetchUser(
+        token = null, // 用存储中的令牌
+        onError = { error ->
+          if (error.isCredentialRejected()) {
+            // 401/403：令牌确实过期或被撤销，这时才清掉凭据
+            Log.warn("the stored github token was rejected, a new login is required. error: ${error.message}")
+            logout()
+          }
+          else {
+            // 网络/服务端故障：**保留**凭据，只回落到未登录，下次启动或手动刷新时重试
+            Log.warn("could not verify the stored github session (network/server), keeping the credential. error: ${error.message}")
+            githubUser = null
+            loginState = LoginState.LoggedOut
+          }
+
+          onMain { onRestored.get(false) }
+        },
+        onSuccess = { user ->
+          githubUser = user
+          loginState = LoginState.LoggedIn
+          markUsed()
+          Log.info("github session restored as @", user.login)
+          onMain { onRestored.get(true) }
+        }
+      )
+    }
+    catch (error: Throwable) {
+      // 同步异常（存储读不出来、请求构造失败等）只回落到未登录，**不**清磁盘凭据：
+      // 一次偶发异常不该把用户的登录吃掉。真正的失效（401/403、刷新令牌被拒）走上面的 onError。
+      Log.err("failed to verify the stored github session, keeping the credential", error)
+      githubUser = null
+      loginState = LoginState.LoggedOut
+      onMain { onRestored.get(false) }
+    }
   }
 
   /**
-   * 开始 GitHub 设备码登录：唤起浏览器 + 等待用户授权 + 换取 token。
-   *
-   * @param openBrowser 是否自动唤起系统浏览器打开认证页
-   * @param onCode 主线程回调，拿到用户码后立即触发，界面应提示用户填入 [DeviceLogin.userCode]
-   * @param onSuccess 主线程回调，登录成功并已取得用户资料
-   * @param onError 主线程回调，登录失败（未配置 Client ID、用户拒绝、设备码超时、网络错误等）
+   * @return 是否是"凭据被 GitHub 拒绝"（令牌过期/被撤销），而不是网络或服务端偶发故障。
+   * 只有前者才应该清掉本地凭据——否则一次断网就会把用户登出。
    */
+  private fun Throwable.isCredentialRejected(): Boolean {
+    val status = (this as? Http.HttpStatusException)?.status ?: return false
+
+    return status == Http.HttpStatus.UNAUTHORIZED || status == Http.HttpStatus.FORBIDDEN
+  }
+
   fun startLogin(
     openBrowser: Boolean = true,
     onCode: Cons<DeviceLogin> = Cons{},
@@ -191,7 +216,7 @@ object GithubAPI {
       .header("Accept", "application/json")
       .header("Content-Type", "application/x-www-form-urlencoded")
       .header("User-Agent", USER_AGENT)
-      .content("client_id=${form(clientId)}&scope=${form(SCOPE)}")
+      .content("client_id=${form(clientId)}" + scope().takeIf { it.isNotBlank() }?.let { "&scope=${form(it)}" }.orEmpty())
       .error { error ->
         val json = error.asGithubJson()
         if (json == null) fail(error, onError)
@@ -202,21 +227,17 @@ object GithubAPI {
       }
   }
 
-  /** 取消正在进行的登录轮询（用户关闭授权界面时调用）。已登录状态不受影响。 */
   fun cancelLogin() {
     stopPolling()
     device = null
     if (loginState == LoginState.Waiting) loginState = LoginState.LoggedOut
   }
 
-  /** 退出登录，并清除本地保存的 token。 */
   fun logout() {
     cancelLogin()
     githubUser = null
+    discardSession()
     loginState = LoginState.LoggedOut
-
-    He.global.remove(TOKEN_KEY)
-    He.global.forceSave()
   }
 
   private fun handleDeviceCode(
@@ -313,15 +334,24 @@ object GithubAPI {
     if (token.isNotBlank()) {
       stopPolling()
       device = null
-      completeLogin(token, onSuccess, onError)
+
+      val access = token.toByteArray(Charsets.UTF_8)
+      val refresh = json.getString("refresh_token", "").takeIf { it.isNotBlank() }?.toByteArray(Charsets.UTF_8)
+      val expiresIn = json.getInt("expires_in", 0)
+
+      completeLogin(
+        accessToken = access,
+        refreshToken = refresh,
+        accessExpiresAt = if (expiresIn > 0) System.currentTimeMillis() + expiresIn * 1000L else 0L,
+        onSuccess = onSuccess,
+        onError = onError,
+      )
       return
     }
 
     when (json.getString("error") ?: "") {
-      // 用户还没在网页上完成授权，继续轮询
       "authorization_pending" -> Unit
 
-      // 轮询过快，按 GitHub 要求放慢频率后继续
       "slow_down" -> {
         pollInterval += 5
         startPolling(onSuccess, onError)
@@ -347,37 +377,68 @@ object GithubAPI {
     }
   }
 
-  private fun completeLogin(token: String, onSuccess: Cons<GithubUser>, onError: Cons<Throwable>) {
-    fetchUser(
-      token = token,
-      onError = { error ->
-        loginState = LoginState.Failed
-        onError.get(error)
-      },
-      onSuccess = { user ->
-        githubUser = user
-        loginState = LoginState.LoggedIn
+  private fun completeLogin(
+    accessToken: ByteArray,
+    refreshToken: ByteArray?,
+    accessExpiresAt: Long,
+    onSuccess: Cons<GithubUser>,
+    onError: Cons<Throwable>,
+  ) {
+    val now = System.currentTimeMillis()
+    val record = SessionRecord(accessToken, refreshToken, accessExpiresAt, now, now)
 
-        // 回调在主线程，写配置与持久化都安全
-        He.global.put(TOKEN_KEY, token)
-        He.global.forceSave()
+    try {
+      fetchUser(
+        // 必须显式传入刚拿到的令牌：此时它还没落盘，走存储取会取不到（登录必然失败）
+        token = record.accessToken,
+        onError = { error ->
+          record.close()
+          loginState = LoginState.Failed
+          onError.get(error)
+        },
+        onSuccess = { user ->
+          persist(record)
+          record.close()
 
-        Log.info("github login succeeded as @", user.login)
-        onSuccess.get(user)
-      }
-    )
+          githubUser = user
+          loginState = LoginState.LoggedIn
+
+          Log.info("github login succeeded as @", user.login)
+          onSuccess.get(user)
+        }
+      )
+    }
+    catch (error: Throwable) {
+      // 本方法由设备码轮询的 HTTP 回调调用，异常路径也必须回主线程：
+      // 调用方（登录面板）会在这个回调里 hide() 面板并重建列表，跨线程改场景图会崩在 Table 布局。
+      record.close()
+      loginState = LoginState.Failed
+      onMain { onError.get(error) }
+    }
   }
 
-  /** 用 token 拉取用户资料；回调在主线程执行。 */
-  private fun fetchUser(token: String, onError: Cons<Throwable>, onSuccess: Cons<GithubUser>) {
-    authRequest(Http.HttpMethod.GET, USER_AUTH_API, token)
+  /**
+   * 拉取用户资料。
+   *
+   * @param token 要使用的令牌；传 null 表示用存储中的当前令牌（恢复会话时用）。
+   *   登录流程必须传刚拿到的令牌——那时它还没写入存储。
+   * 回调在主线程执行。
+   */
+  private fun fetchUser(token: ByteArray?, onError: Cons<Throwable>, onSuccess: Cons<GithubUser>) {
+    val request = if (token != null) {
+      Http.request(Http.HttpMethod.GET, USER_AUTH_API).setupAuthHead(token)
+    }
+    else {
+      authRequest(Http.HttpMethod.GET, USER_AUTH_API)
+    }
+
+    request
       .error { error -> onMain { onError.get(error) } }
       .submit { response ->
         try {
           val res = Jval.read(response.resultAsString)
 
           val user = GithubUser(
-            token = token,
             login = res.getString("login") ?: "",
             name = res.getString("name") ?: (res.getString("login") ?: ""),
             url = res.getString("html_url") ?: (res.getString("url") ?: ""),
@@ -391,53 +452,43 @@ object GithubAPI {
       }
   }
 
-  // ---------------------------------------------------------------------------------------------
-  // 星标（收藏夹数据来源）
-  // ---------------------------------------------------------------------------------------------
-
   /**
    * 为当前登录用户标星某个仓库，仓库名为 `owner/repo`。
-   * 注：回调在 HTTP 线程执行，更新界面请自行 `Core.app.post { }`。
+   *
+   * 会先确保 access token 未过期（必要时刷新）。
+   * 两个回调都保证在**主线程**执行；界面里可以直接改控件，不需要自己 post。
    */
   fun star(repo: String, errorHandler: Cons<Throwable> = Cons{}, success: ConsT<Http.HttpResponse, Exception>) {
-    authRequest(Http.HttpMethod.PUT, "$STAR_API/$repo")
-      // PUT 无请求体，显式置空以保证发送 Content-Length: 0
-      .content("")
-      .error(errorHandler)
-      .submit(success)
+    withFreshToken(errorHandler) {
+      authRequest(Http.HttpMethod.PUT, "$STAR_API/$repo")
+        // PUT 无请求体，显式置空以保证发送 Content-Length: 0
+        .content("")
+        .error { error -> onMain { errorHandler.get(error) } }
+        .submit { response -> onMain { success.get(response) } }
+    }
   }
 
   /**
    * 取消当前登录用户对某个仓库的标星，仓库名为 `owner/repo`。
-   * 注：回调在 HTTP 线程执行。
+   * 两个回调都保证在**主线程**执行。
    */
   fun unstar(repo: String, errorHandler: Cons<Throwable> = Cons{}, success: ConsT<Http.HttpResponse, Exception>) {
-    authRequest(Http.HttpMethod.DELETE, "$STAR_API/$repo")
-      .error(errorHandler)
-      .submit(success)
+    withFreshToken(errorHandler) {
+      authRequest(Http.HttpMethod.DELETE, "$STAR_API/$repo")
+        .error { error -> onMain { errorHandler.get(error) } }
+        .submit { response -> onMain { success.get(response) } }
+    }
   }
 
-  /**
-   * 拉取当前登录用户的**全部**星标仓库（自动翻页），结果为一个 JSON 数组。
-   * 回调在主线程执行。
-   */
   fun listStarred(errorHandler: Cons<Throwable> = Cons{}, result: Cons<Jval>) {
-    if (!usable()) {
-      onMain { errorHandler.get(IllegalStateException("no auth token")) }
-      return
-    }
-
-    val acc = Jval.newArray()
-    fetchStarredPage(1, acc, errorHandler) {
-      onMain { result.get(acc) }
+    withFreshToken(errorHandler) {
+      val acc = Jval.newArray()
+      fetchStarredPage(1, acc, errorHandler) {
+        onMain { result.get(acc) }
+      }
     }
   }
 
-  /**
-   * 拉取星标仓库中符合 mod 约定的仓库名（`owner/repo`，已统一小写）。
-   * 默认判定规则：仓库 topics 含 [MOD_TOPIC]；需要别的规则请自行遍历 [listStarred] 的结果。
-   * 回调在主线程执行。
-   */
   fun listStarredRepos(errorHandler: Cons<Throwable> = Cons{}, result: Cons<List<String>>) {
     listStarred(errorHandler) { json ->
       val repos = ArrayList<String>()
@@ -453,34 +504,24 @@ object GithubAPI {
     }
   }
 
-  /** @return 某个星标仓库是否应被视为 mod 收藏；默认要求 topics 含 [MOD_TOPIC] */
   fun isModRepo(raw: Jval): Boolean {
     val topics = raw.get("topics") ?: return false
-    if (!topics.isArray()) return false
-
-    return topics.asArray().any { it.asString() == MOD_TOPIC }
+    return topics.isArray && topics.asArray().any { it.asString() == MOD_TOPIC }
   }
 
-  /**
-   * 查询某个仓库是否已被当前用户标星。
-   * 204 表示已标星，404 表示未标星。回调在主线程执行。
-   */
   fun isStarred(repo: String, errorHandler: Cons<Throwable> = Cons{}, result: Cons<Boolean>) {
-    if (!usable()) {
-      onMain { errorHandler.get(IllegalStateException("no auth token")) }
-      return
+    withFreshToken(errorHandler) {
+      authRequest(Http.HttpMethod.GET, "$STAR_API/$repo")
+        .error { error ->
+          if ((error as? Http.HttpStatusException)?.status == Http.HttpStatus.NOT_FOUND) {
+            onMain { result.get(false) }
+          }
+          else {
+            onMain { errorHandler.get(error) }
+          }
+        }
+        .submit { onMain { result.get(true) } }
     }
-
-    authRequest(Http.HttpMethod.GET, "$STAR_API/$repo")
-      .error { error ->
-        if ((error as? Http.HttpStatusException)?.status == Http.HttpStatus.NOT_FOUND) {
-          onMain { result.get(false) }
-        }
-        else {
-          onMain { errorHandler.get(error) }
-        }
-      }
-      .submit { onMain { result.get(true) } }
   }
 
   private fun fetchStarredPage(
@@ -489,7 +530,7 @@ object GithubAPI {
     errorHandler: Cons<Throwable>,
     onDone: () -> Unit,
   ) {
-    authGET("$STAR_API?per_page=$PAGE_SIZE&page=$page")
+    authRequest(Http.HttpMethod.GET, "$STAR_API?per_page=$PAGE_SIZE&page=$page")
       .error { error -> onMain { errorHandler.get(error) } }
       .submit { response ->
         try {
@@ -508,10 +549,6 @@ object GithubAPI {
       }
   }
 
-  // ---------------------------------------------------------------------------------------------
-  // 底层请求
-  // ---------------------------------------------------------------------------------------------
-
   fun authGET(url: String): Http.HttpRequest {
     return authRequest(Http.HttpMethod.GET, url)
   }
@@ -521,36 +558,331 @@ object GithubAPI {
   }
 
   /**
-   * 构造带鉴权头的请求。未登录时抛 [IllegalStateException]。
-   * 注：返回的请求回调在 HTTP 线程执行。
+   * 用存储中的当前令牌构造鉴权请求。
+   *
+   * ⚠️ **不能**把 `githubUser` 是否为空当前置条件：游戏启动时正是"存储里有凭据、`githubUser` 还是 null"
+   * 的空窗期（恢复会话就发生在此时）。曾经这里多了一次 `githubUser == null` 判断，导致每次启动恢复会话
+   * 都在 [fetchUser] 里同步抛 "no auth token"，被 [verifyRestoredSession] 的兜底当成失效处理并清掉
+   * 磁盘凭据 —— 表现就是"每次重启都掉登录"。
    */
   fun authRequest(method: Http.HttpMethod, url: String): Http.HttpRequest {
-    if (githubUser == null) throw IllegalStateException("no auth token")
+    val record = loadSession() ?: throw IllegalStateException("no auth token")
 
-    return authRequest(method, url, githubUser!!.token)
+    return record.use { Http.request(method, url).setupAuthHead(it.accessToken) }
   }
 
-  private fun authRequest(method: Http.HttpMethod, url: String, token: String): Http.HttpRequest {
-    return Http.request(method, url).setupAuthHead(token)
-  }
-
-  private fun Http.HttpRequest.setupAuthHead(token: String): Http.HttpRequest {
+  private fun Http.HttpRequest.setupAuthHead(token: ByteArray): Http.HttpRequest {
     header("Accept", "application/vnd.github+json")
-    header("Authorization", "Bearer $token")
+    header("Authorization", "Bearer " + String(token, Charsets.UTF_8))
     header("X-GitHub-Api-Version", API_VERSION)
     header("User-Agent", USER_AGENT)
 
     return this
   }
 
-  // ---------------------------------------------------------------------------------------------
-  // 工具
-  // ---------------------------------------------------------------------------------------------
+  private fun withFreshToken(onError: Cons<Throwable>, action: () -> Unit) {
+    val record = loadSession()
 
-  /** 在游戏主线程执行；应用未就绪时直接执行。 */
+    if (record == null || githubUser == null) {
+      onMain { onError.get(IllegalStateException("no auth token")) }
+      return
+    }
+
+    record.use { record ->
+      if (!record.isWithinPolicy()) {
+        Log.info("github session reached its idle/absolute limit, a new login is required")
+        discardSession()
+        onMain { onError.get(IllegalStateException("github session expired, please log in again")) }
+        return
+      }
+
+      if (!record.needsRefresh() || record.refreshToken == null) {
+        markUsed()
+        runAction(onError, action)
+        return
+      }
+
+      var queued = false
+      synchronized(refreshLock) {
+        if (refreshing) {
+          refreshWaiters.add(onError to action)
+          queued = true
+        }
+        else {
+          refreshing = true
+        }
+      }
+
+      if (queued) return
+
+      refreshSession(record, onError) {
+        markUsed()
+        runAction(onError, action)
+      }
+    }
+  }
+
+  private fun refreshSession(record: SessionRecord, onError: Cons<Throwable>, onSuccess: () -> Unit) {
+    val refreshSource = record.refreshToken
+    if (refreshSource == null) {
+      onSuccess()
+      return
+    }
+
+    val refresh = refreshSource.copyOf()
+    val authorizedAt = record.authorizedAt
+
+    fun finish() {
+      val waiters = synchronized(refreshLock) {
+        refreshing = false
+        refreshWaiters.toList().also { refreshWaiters.clear() }
+      }
+
+      waiters.forEach { (waiterError, waiterAction) -> withFreshToken(waiterError, waiterAction) }
+    }
+
+    fun failed(json: Jval?) {
+      refresh.fill(0)
+      val reason = json?.let { describe(it) } ?: "unknown error"
+
+      if (json == null) {
+        // 拿不到结构化的拒绝响应 = 网络/服务端故障：**保留**凭据，下次使用或下次启动再试。
+        // 否则一次断网刷新失败就会把用户的登录吃掉。
+        Log.warn("github token refresh failed due to a network/server error (@), keeping the stored credential", reason)
+        finish()
+        onMain { onError.get(IllegalStateException("could not refresh the github session: $reason")) }
+        return
+      }
+
+      // GitHub 明确拒绝了刷新请求（如 bad_refresh_token / invalid_grant）：凭据确实失效
+      Log.warn("github token refresh was rejected (@), a new login is required", reason)
+      discardSession()
+      finish()
+      onMain { onError.get(IllegalStateException("github session expired, please log in again: $reason")) }
+    }
+
+    val body = "client_id=${form(clientId())}" +
+      "&grant_type=${form(REFRESH_GRANT)}" +
+      "&refresh_token=${form(String(refresh, Charsets.UTF_8))}"
+
+    Http.request(Http.HttpMethod.POST, ACCESS_TOKEN_API)
+      .header("Accept", "application/json")
+      .header("Content-Type", "application/x-www-form-urlencoded")
+      .header("User-Agent", USER_AGENT)
+      .content(body)
+      .error { error -> failed(error.asGithubJson()) }
+      .submit { response ->
+        try {
+          val json = Jval.read(response.resultAsString)
+          val access = json.getString("access_token") ?: ""
+
+          if (access.isBlank()) {
+            failed(json)
+          }
+          else {
+            val now = System.currentTimeMillis()
+            val expiresIn = json.getInt("expires_in", 0)
+            val rotated = json.getString("refresh_token", "").takeIf { it.isNotBlank() }?.toByteArray(Charsets.UTF_8)
+
+            val next = SessionRecord(
+              accessToken = access.toByteArray(Charsets.UTF_8),
+              refreshToken = rotated ?: refresh.copyOf(),
+              accessExpiresAt = if (expiresIn > 0) now + expiresIn * 1000L else 0L,
+              authorizedAt = authorizedAt,
+              lastUsedAt = now,
+            )
+
+            try {
+              persist(next)
+            }
+            finally {
+              next.close()
+              refresh.fill(0)
+              rotated?.fill(0)
+            }
+
+            finish()
+            onSuccess()
+          }
+        }
+        catch (e: Exception) {
+          failed(null)
+        }
+      }
+  }
+
+  /**
+   * 记录一次使用，用于 24 小时空闲上限。
+   *
+   * 独立 load → 更新 lastUsedAt → persist → close：不依赖任何常驻对象。
+   * 写盘有节流，避免每次请求都重写密文。
+   */
+  private fun markUsed() {
+    val record = loadSession() ?: return
+
+    try {
+      val now = System.currentTimeMillis()
+      if (now - record.lastUsedAt < LAST_USED_WRITE_INTERVAL_MS) return
+
+      persist(record.accessToken, record.refreshToken, record.accessExpiresAt, record.authorizedAt, now)
+    }
+    finally {
+      record.close()
+    }
+  }
+
+  /** 把凭据加密写入独立文件（不进 [He.global]，也不进 global_vars.bin 的备份链）。 */
+  private fun persist(record: SessionRecord) {
+    persist(record.accessToken, record.refreshToken, record.accessExpiresAt, record.authorizedAt, record.lastUsedAt)
+  }
+
+  /**
+   * 加密落盘。明文只在编码缓冲里存在，写完立即清零；本方法不保留任何引用。
+   */
+  private fun persist(
+    accessToken: ByteArray,
+    refreshToken: ByteArray?,
+    accessExpiresAt: Long,
+    authorizedAt: Long,
+    lastUsedAt: Long,
+  ) {
+    val plain = encodeSession(accessToken, refreshToken, accessExpiresAt, authorizedAt, lastUsedAt)
+
+    try {
+      SecureStore.write(SESSION_SECRET_ID, plain)
+    }
+    finally {
+      plain.fill(0)
+    }
+  }
+
+  private fun loadSession(): SessionRecord? {
+    val raw = SecureStore.readBytes(SESSION_SECRET_ID) ?: return null
+
+    val decoded = decodeSession(raw)
+    if (decoded == null) {
+      Log.warn("stored github session could not be parsed, discarding it")
+      SecureStore.erase(SESSION_SECRET_ID)
+    }
+
+    return decoded
+  }
+
+  private fun discardSession() {
+    githubUser = null
+    loginState = LoginState.LoggedOut
+    SecureStore.erase(SESSION_SECRET_ID)
+  }
+
+  private class SessionRecord(
+    val accessToken: ByteArray,
+    val refreshToken: ByteArray?,
+    val accessExpiresAt: Long,
+    val authorizedAt: Long,
+    val lastUsedAt: Long,
+  ) : AutoCloseable {
+    fun isWithinPolicy(): Boolean {
+      val now = System.currentTimeMillis()
+      if (now - lastUsedAt > SESSION_IDLE_TIMEOUT_MS) return false
+      if (now - authorizedAt > SESSION_MAX_AGE_MS) return false
+
+      return true
+    }
+
+    fun needsRefresh(): Boolean =
+      accessExpiresAt > 0 && System.currentTimeMillis() + TOKEN_REFRESH_SKEW_MS >= accessExpiresAt
+
+    override fun close() {
+      accessToken.fill(0)
+      refreshToken?.fill(0)
+    }
+  }
+  private fun encodeSession(
+    accessToken: ByteArray,
+    refreshToken: ByteArray?,
+    accessExpiresAt: Long,
+    authorizedAt: Long,
+    lastUsedAt: Long,
+  ): ByteArray {
+    val buffer = ByteBuffer.allocate(
+      SESSION_RECORD_HEADER + accessToken.size + (refreshToken?.size ?: 0)
+    )
+
+    buffer.put(SESSION_RECORD_VERSION)
+    buffer.put(if (refreshToken == null) 0 else 1)
+    buffer.putLong(accessExpiresAt)
+    buffer.putLong(authorizedAt)
+    buffer.putLong(lastUsedAt)
+    buffer.putShort(accessToken.size.toShort())
+    buffer.putShort((refreshToken?.size ?: 0).toShort())
+    buffer.put(accessToken)
+    refreshToken?.also { buffer.put(it) }
+
+    return buffer.array()
+  }
+
+  private fun decodeSession(payload: ByteArray): SessionRecord? {
+    var access: ByteArray? = null
+    var refresh: ByteArray? = null
+
+    try {
+      val buffer = ByteBuffer.wrap(payload)
+
+      if (buffer.get() != SESSION_RECORD_VERSION) return null
+
+      val flags = buffer.get().toInt()
+      val accessExpiresAt = buffer.getLong()
+      val authorizedAt = buffer.getLong()
+      val lastUsedAt = buffer.getLong()
+      val accessLength = buffer.short.toInt()
+      val refreshLength = buffer.short.toInt()
+
+      if (accessLength <= 0 || accessLength > buffer.remaining()) return null
+
+      access = ByteArray(accessLength).also { buffer.get(it) }
+
+      if ((flags and 1) != 0) {
+        if (refreshLength <= 0 || refreshLength > buffer.remaining()) return null
+        refresh = ByteArray(refreshLength).also { buffer.get(it) }
+      }
+
+      return SessionRecord(access, refresh, accessExpiresAt, authorizedAt, lastUsedAt)
+    }
+    catch (error: Throwable) {
+      access?.fill(0)
+      refresh?.fill(0)
+      return null
+    }
+    finally {
+      payload.fill(0)
+    }
+  }
+
+  /**
+   * 在游戏主线程执行；应用未就绪时直接执行。
+   *
+   * **本对象的对外回调一律必须经过这里**（onError / onSuccess / result / listener）。
+   * 一旦漏掉，调用方（界面）就会在 HTTP / 定时器线程上改场景图，
+   * 与渲染线程的 `Table.layout()/computeSize()` 并发，抛出
+   * `ArrayIndexOutOfBoundsException`（实测崩在 `Table.computeSize:940`、`Table.layout:1092`）。
+   */
   private fun onMain(action: () -> Unit) {
     val app = Core.app
     if (app == null) action() else app.post(action)
+  }
+
+  /**
+   * 执行 [action] 并把**同步抛出的异常**也送进 [onError]（同样回主线程）。
+   * 主要是防止 [authRequest] 在"检查通过之后、真正取令牌之前"会话被作废时把异常抛进 Arc 的 Http 回调，
+   * 那样调用方既拿不到错误回调、也不会重试，界面就会静默卡住。
+   */
+  private fun runAction(onError: Cons<Throwable>, action: () -> Unit) {
+    try {
+      action()
+    }
+    catch (error: Throwable) {
+      onMain { onError.get(error) }
+    }
   }
 
   private fun fail(error: Throwable, onError: Cons<Throwable>) {
@@ -559,7 +891,6 @@ object GithubAPI {
     onMain { onError.get(error) }
   }
 
-  /** GitHub 的错误响应也会带 JSON body（如 invalid_client），尽量取出其中的 JSON。 */
   private fun Throwable.asGithubJson(): Jval? {
     val response = (this as? Http.HttpStatusException)?.response ?: return null
 
@@ -581,32 +912,20 @@ object GithubAPI {
 
   private fun form(value: String): String = URLEncoder.encode(value, "UTF-8")
 
-  /** 设备码登录信息，界面据此提示用户去网页填入用户码。 */
   class DeviceLogin(
-    /** 展示给用户的用户码（形如 `WDJB-MJHT`），用户在认证页填入它 */
     val userCode: String,
-    /** 需要打开的 GitHub 官方认证页 */
     val verificationUri: String,
-    /** 设备码有效期（秒） */
     val expiresIn: Int,
-    /** GitHub 建议的轮询间隔（秒） */
     val interval: Int,
     internal val deviceCode: String,
   )
 
-  /** 已登录的 GitHub 账号信息。 */
   class GithubUser(
-    internal val token: String,
-    /** 账号登录名（handle） */
     val login: String,
-    /** 账号昵称（可能为空，回退为 [login]） */
     val name: String,
-    /** 账号主页地址 */
     val url: String,
-    /** 头像地址 */
     val avatarUrl: String,
   ) {
-    /** 兼容旧字段名：即 [login] */
     val username: String get() = login
   }
 }

@@ -39,24 +39,42 @@ object Downloader {
 
   private val urlReplacers = OrderedMap<String, String>()
 
+  /**
+   * 镜像表的不可变快照。
+   *
+   * Arc 的 `ObjectMap` 迭代器是**共享对象**：多个下载协程同时在 `for (entry in map)` 上迭代时，
+   * 第二个会抛 `ArcRuntimeException: #iterator() cannot be used nested.`，把该次下载直接打死
+   * （实测日志里每个图标请求都在报这个）。所以读侧只走快照，写侧重建快照。
+   */
+  @Volatile
+  private var mirrors: List<Pair<String, String>> = emptyList()
+
+  private fun rebuildMirrors() {
+    synchronized(urlReplacers) {
+      mirrors = urlReplacers.entries().map { it.key to it.value }
+    }
+  }
+
   fun setMirror(source: String, to: String) {
     urlReplacers.put(source, to)
+    rebuildMirrors()
   }
 
   fun removeMirror(source: String) {
     urlReplacers.remove(source)
+    rebuildMirrors()
   }
 
   fun clearMirrors() {
     urlReplacers.clear()
+    rebuildMirrors()
   }
 
   private fun mirrored(url: String): String {
     var result = url
 
-    for (entry in urlReplacers) {
-      val from = entry.key ?: continue
-      if (result.startsWith(from)) result = result.replaceFirst(from.toRegex(), entry.value!!)
+    for ((from, to) in mirrors) {
+      if (from.isNotEmpty() && result.startsWith(from)) result = result.replaceFirst(from.toRegex(), to)
     }
 
     return result

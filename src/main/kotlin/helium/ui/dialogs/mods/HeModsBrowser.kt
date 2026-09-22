@@ -7,6 +7,9 @@ import arc.math.Interp
 import arc.math.geom.Rect
 import arc.scene.Group
 import arc.scene.style.Drawable
+import arc.scene.style.Style
+import arc.scene.style.TextureRegionDrawable
+import arc.scene.ui.Dialog
 import arc.scene.ui.Image
 import arc.scene.ui.Label
 import arc.scene.ui.ScrollPane
@@ -15,6 +18,7 @@ import arc.scene.ui.layout.Scl
 import arc.scene.ui.layout.Table
 import arc.struct.ObjectMap
 import arc.struct.ObjectSet
+import arc.struct.OrderedMap
 import arc.util.Align
 import arc.util.Log
 import arc.util.Scaling
@@ -27,6 +31,7 @@ import helium.ui.ButtonEntry
 import helium.ui.HeAssets
 import helium.ui.UIUtils
 import helium.ui.UIUtils.line
+import helium.GithubAPI.LoginState.*
 import helium.ui.dialogs.mods.ModsDialogHelper.addTip
 import helium.ui.dialogs.mods.ModsDialogHelper.buildModAttrIcons
 import helium.ui.dialogs.mods.ModsDialogHelper.buildModAttrList
@@ -56,41 +61,48 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
       add(CullTable(background).also { t -> build?.also { it.get(t) } })
   }
 
-  /** 收藏夹的数据来源。 */
   enum class FavoritesMode {
-    /** 未登录 GitHub：使用本地存档，离线可用 */
     Local,
-    /** 已登录 GitHub：使用该账号的仓库 Star 作为收藏夹 */
     Github,
   }
 
+  /** 真正的重建实现，在构建 ScrollPane 时赋值 */
+  private lateinit var rebuildListNow: () -> Unit
+
+  /** 构造线程即游戏主线程；用于判断回调当前在哪个线程 */
+  private val mainThread = Thread.currentThread()
+
   /**
-   * 收藏夹加载状态，供界面按状态切换提示文本：
-   * 对应 bundle 的 `dialog.mods.shouldLogin` / `dialog.mods.loading` / `dialog.mods.noFavorites` / `dialog.mods.checkFailed`。
+   * 重建入口：**保证只在主线程执行**。
+   *
+   * 场景图不能被异步回调改。曾经 GitHub 登录失败的回调在 HTTP 线程里直接 `hide()` + 重建列表，
+   * 与渲染线程的 `Table.layout()/computeSize()` 并发，抛 `ArrayIndexOutOfBoundsException`
+   * （实测 `Table.computeSize:940` 的 `Index 1 out of bounds for length 1`、
+   * `Table.layout:1092` 的 `Index 8 out of bounds for length 8`）。这里兜底，即使调用方漏了线程判断也不会崩。
    */
-  enum class FavoritesStatus {
-    /** 离线模式，未登录 GitHub */
-    NonLogin,
-    /** 正在拉取账号 Star */
-    Loading,
-    /** 数据就绪 */
-    Ready,
-    /** 拉取失败 */
-    Error,
+  private fun rebuildList() {
+    runOnMain { if (::rebuildListNow.isInitialized) rebuildListNow() }
   }
 
-  private lateinit var rebuildList: () -> Unit
+  private fun runOnMain(action: () -> Unit) {
+    if (Thread.currentThread() === mainThread) action() else Core.app.post(action)
+  }
 
   private val browserTabs = ObjectMap<ModListing, Table>()
 
-  /** 收藏的 mod：离线模式来自本地存档，GitHub 模式来自账号 Star */
   private val favoritesMods = ObjectSet<Name>()
 
   /** 收藏的仓库全名（`owner/repo`，小写）。与 [favoritesMods] 同步维护，用于按仓库地址精确匹配 */
   private val favoriteRepos = ObjectSet<String>()
 
-  private var favoriteStatus = FavoritesStatus.NonLogin
   private var favoritesLoading = false
+
+  /**
+   * 收藏夹列表是否拉取失败。这是独立于登录状态的状态：
+   * 用户可能已登录（[GithubAPI.LoginState.LoggedIn]）但 star 列表没拉回来，登录枚举表达不了。
+   */
+  var favoritesLoadFailed = false
+    private set
 
   private var search = ""
   private var orderDate = false
@@ -102,16 +114,6 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
     resized(::rebuild)
   }
 
-  // =============================================================================================
-  // 收藏夹挂点（离线 / GitHub 双实现）
-  //
-  // 说明：界面尚未对接，以下函数即为对接入口。
-  //  - 状态查询：favoritesMode / githubLoggedIn / githubUser / currentFavoritesStatus
-  //              / isFavorite / favoriteRepoList
-  //  - 行为挂点：reloadFavorites / toggleFavorite / loginGithub / logoutGithub / cancelGithubLogin
-  // =============================================================================================
-
-  /** @return 当前收藏夹实现：登录 GitHub 后自动切换为账号 Star */
   val favoritesMode: FavoritesMode
     get() = if (GithubAPI.usable()) FavoritesMode.Github else FavoritesMode.Local
 
@@ -121,8 +123,11 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
   /** @return 当前登录的 GitHub 账号，未登录时为 null */
   val githubUser: GithubAPI.GithubUser? get() = GithubAPI.currUser()
 
-  /** @return 收藏夹加载状态，供界面展示对应提示 */
-  val currentFavoritesStatus: FavoritesStatus get() = favoriteStatus
+  /**
+   * @return 当前收藏夹/登录状态，直接取 [GithubAPI.state]，不维护平行枚举。
+   * LoggedOut 离线收藏夹 / Waiting 等待网页授权 / LoggedIn 使用账号 Star / Failed 登录失败。
+   */
+  val currentFavoritesStatus: GithubAPI.LoginState get() = GithubAPI.state()
 
   /** @return 某个 mod 是否已收藏（按当前模式判断） */
   fun isFavorite(mod: ModListing): Boolean =
@@ -140,9 +145,23 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
   }
 
   /**
-   * 读取本地离线收藏夹（不访问网络）。这是「离线模式」的收藏夹实现。
+   * 用 modList 的条目补全收藏夹的 [Name]。
+   *
+   * GitHub 模式下收藏夹只记录 Star 到的仓库全名（`owner/repo`），而 [Name] 的 author/name 取自仓库内
+   * mod.json / mod.hjson 的实际上报值（由索引脚本对符合 topic 条件的仓库提取），二者并不一致：
+   * 用仓库地址直接拼 [Name] 永远匹配不到 modList 里的条目。所以这里按 repo 反查条目后再取它的 [Name]。
+   *
+   * modList 未就绪时不做事：此时 [favoriteRepos] 已能按仓库地址精确匹配，等列表重建时会再次调用本方法补全。
    */
-  fun loadFavorites(){
+  private fun resolveFavoriteNames(list: OrderedMap<Name, ModListing>) {
+    if (favoriteRepos.isEmpty) return
+
+    list.values().forEach { m ->
+      if (favoriteRepos.contains(m.repo.lowercase())) favoritesMods.add(Name(m))
+    }
+  }
+
+  fun loadLocalFavorites(){
     favoritesMods.clear()
     favoriteRepos.clear()
 
@@ -159,11 +178,7 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
     }
   }
 
-  /**
-   * 保存本地离线收藏夹。这是「离线模式」的收藏夹实现；
-   * GitHub 模式下收藏状态由账号 Star 决定，不写本地存档。
-   */
-  fun saveFavorites() {
+  fun saveLocalFavorites() {
     if (favoritesMode == FavoritesMode.Github) return
 
     val list = Jval.newArray()
@@ -177,17 +192,10 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
     He.global.put("favorite-mods", list.toString())
   }
 
-  /**
-   * 按当前模式刷新收藏夹数据（不改动界面）。
-   * - 离线模式：直接读取本地存档；
-   * - GitHub 模式：拉取登录账号的 Star 仓库（仅 topics 含 `mindustry-mod` 的仓库）。
-   *
-   * @param onDone 主线程回调，数据刷新完成后触发
-   */
   fun refreshFavorites(onDone: () -> Unit = {}) {
     if (favoritesMode == FavoritesMode.Local) {
-      loadFavorites()
-      favoriteStatus = FavoritesStatus.NonLogin
+      loadLocalFavorites()
+      favoritesLoadFailed = false
       onDone()
       return
     }
@@ -195,48 +203,36 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
     if (favoritesLoading) return
 
     favoritesLoading = true
-    favoriteStatus = FavoritesStatus.Loading
+    favoritesLoadFailed = false
 
     GithubAPI.listStarredRepos(
       errorHandler = { error ->
         favoritesLoading = false
-        favoriteStatus = FavoritesStatus.Error
+        favoritesLoadFailed = true
 
         Log.err(error)
         onDone()
       }
     ) { repos ->
       favoritesLoading = false
+      favoritesLoadFailed = false
       favoritesMods.clear()
       favoriteRepos.clear()
 
-      repos.forEach { repo ->
-        favoriteRepos.add(repo)
+      // Star 接口只给出仓库全名，且它和 Name 的 author/name 不一致，不能在这里直接拼 Name；
+      // 先只记录仓库全名，Name 由 resolveFavoriteNames 回到 modList 中按 repo 反查（索引已就绪则立即补全）。
+      repos.forEach { favoriteRepos.add(it) }
 
-        val bi = repo.split("/")
-        if (bi.size == 2) favoritesMods.add(Name(bi[0], bi[1]))
-      }
+      ModsDialogHelper.modList?.also(::resolveFavoriteNames)
 
-      favoriteStatus = FavoritesStatus.Ready
       onDone()
     }
   }
 
-  /**
-   * 刷新收藏夹并重建列表，界面上的「刷新」按钮可直接挂这里。
-   */
   fun reloadFavorites() {
     refreshFavorites { rebuildFavoritesView() }
   }
 
-  /**
-   * 切换某个 mod 的收藏状态。
-   * - 离线模式：读写本地存档；
-   * - GitHub 模式：调用 star / unstar 接口，成功后同步内存缓存。
-   *
-   * @param onError 主线程回调，失败时触发（界面可据此提示）
-   * @param onResult 主线程回调，参数为切换后的收藏状态
-   */
   fun toggleFavorite(
     mod: ModListing,
     onError: Cons<Throwable> = Cons{},
@@ -258,7 +254,7 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
         true
       }
 
-      saveFavorites()
+      saveLocalFavorites()
       onResult.get(nowFavorite)
       return
     }
@@ -268,33 +264,24 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
       return
     }
 
+    // star/unstar 的回调已由 GithubAPI 保证在主线程投递，这里直接改状态与界面即可
     if (favoritesMods.contains(name) || favoriteRepos.contains(lower)) {
-      GithubAPI.unstar(repo, { error -> onError.get(error) }) {
-        Core.app.post {
-          favoritesMods.remove(name)
-          favoriteRepos.remove(lower)
-          onResult.get(false)
-        }
+      GithubAPI.unstar(repo, onError) {
+        favoritesMods.remove(name)
+        favoriteRepos.remove(lower)
+        onResult.get(false)
       }
     }
     else {
-      GithubAPI.star(repo, { error -> onError.get(error) }) {
-        Core.app.post {
-          favoritesMods.add(name)
-          favoriteRepos.add(lower)
-          onResult.get(true)
-        }
+      GithubAPI.star(repo, onError) {
+        favoritesMods.add(name)
+        favoriteRepos.add(lower)
+        onResult.get(true)
       }
     }
   }
 
-  /**
-   * 登录挂点：唤起系统浏览器打开 GitHub 认证页，并等待用户授权。
-   *
-   * @param onCode 主线程回调，界面应在此展示用户码 `device.userCode`
-   * @param onError 主线程回调，登录失败
-   * @param onDone 主线程回调，登录成功后触发，参数为登录账号
-   */
+  /** 唤起系统浏览器打开 GitHub 认证页，等待用户授权。 */
   fun loginGithub(
     onCode: Cons<GithubAPI.DeviceLogin> = Cons{},
     onError: Cons<Throwable> = Cons{},
@@ -311,26 +298,23 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
     )
   }
 
-  /** 取消正在进行的 GitHub 登录（用户关闭授权界面时调用）。 */
+  /** 取消正在进行的 GitHub 登录 */
   fun cancelGithubLogin() {
     GithubAPI.cancelLogin()
   }
 
-  /** 退出 GitHub 登录，并回落到本地离线收藏夹。 */
+  /** 退出 GitHub 登录 */
   fun logoutGithub() {
     GithubAPI.logout()
-    loadFavorites()
-    favoriteStatus = FavoritesStatus.NonLogin
+    loadLocalFavorites()
+    favoritesLoadFailed = false
     rebuildFavoritesView()
   }
 
-  /** 供界面挂点安全重建收藏夹列表（界面尚未构建时不做事）。 */
-  private fun rebuildFavoritesView() {
-    if (::rebuildList.isInitialized) rebuildList()
-  }
+  private fun rebuildFavoritesView() = rebuildList()
 
   fun rebuild(){
-    loadFavorites()
+    loadLocalFavorites()
 
     cont.clearChildren()
     cont.table { main ->
@@ -370,7 +354,7 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
 
         val n = max((Core.graphics.width/Scl.scl(540f)).toInt(), 1)
 
-        rebuildList = {
+        rebuildListNow = {
           var favCols: Array<Table>? = null
           var normCols: Array<Table>? = null
 
@@ -379,41 +363,70 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
           list.row()
           list.line(Pal.accent, true, 4f).pad(6f).padLeft(20f).padRight(20f)
           list.row()
-          list.cullTable { fav ->
-            //when (favoriteStatus) {
-            //  NonLogin -> {
-            //    fav.table { tab ->
-            //      tab.image(Icon.github).size(46f)
-            //      tab.add(Core.bundle["dialog.mods.shouldLogin"]).pad(36f).padLeft(12f)
-            //    }.fill().colspan(n)
-            //    fav.row()
-            //  }
-            //  Loading -> {
-            //    fav.table { tab ->
-            //      tab.image(HeAssets.loading).size(46f).color(Pal.accent)
-            //      tab.add(Core.bundle["dialog.mods.loading"]).color(Pal.accent).pad(36f).padLeft(12f)
-            //    }.fill().colspan(n)
-            //    fav.row()
-            //  }
-            //  Ready -> {
-            //    if (favoritesMods.isEmpty) {
-            //      fav.table { tab ->
-            //        tab.image(Icon.box).size(46f).color(Pal.accent)
-            //        tab.add(Core.bundle["dialog.mods.noFavorites"]).pad(36f).padLeft(12f)
-            //      }.fill().colspan(n)
-            //      fav.row()
-            //    }
-            //  }
-            //  Error -> {
-            //    fav.table { tab ->
-            //      tab.image(HeAssets.networkError).size(46f).color(Color.red)
-            //      tab.add(Core.bundle["dialog.mods.checkFailed"], Styles.outlineLabel).pad(36f).padLeft(12f)
-            //    }.fill().colspan(n)
-            //    fav.row()
-            //  }
-            //}
 
-            if (favoritesMods.isEmpty) {
+          list.table(HeAssets.grayUIAlpha) { github ->
+            when(currentFavoritesStatus){
+              LoggedOut -> {
+                github.add(Core.bundle["dialog.mods.nonLogin"]).pad(4f)
+                  .wrap(true).growX().labelAlign(Align.center)
+                github.row()
+                github.button(Core.bundle["misc.login"], Icon.githubSmall, Styles.cleart, 32f){
+                  onLogin()
+                  rebuildList()
+                }.pad(4f).margin(6f)
+              }
+              Waiting -> {
+                github.image(HeAssets.loading).size(32f).pad(4f)
+                github.add(Core.bundle["dialog.mods.logining"]).padLeft(8f)
+              }
+              LoggedIn -> {
+                val user = githubUser!!
+                val avatar = Downloader.downloadLazyDrawable(
+                  user.avatarUrl,
+                  (Tex.nomap as TextureRegionDrawable).region
+                )
+
+                github.add(Core.bundle["dialog.mods.loggedStar"]).pad(4f)
+                  .wrap(true).growX().labelAlign(Align.center)
+                github.row()
+                github.table { account ->
+                  account.add(Core.bundle["dialog.mods.loginedAccount"])
+
+                  account.button({ t ->
+                    t.image(avatar).size(32f).pad(4f)
+                    t.add(user.username).pad(4f)
+                  }, Styles.cleart){
+                    Core.app.openURI(user.url)
+                  }.pad(4f).margin(6f)
+
+                  account.button(Core.bundle["misc.logout"], Icon.exitSmall, Styles.cleart, 32f){
+                    logoutGithub()
+                    rebuildList()
+                  }.pad(4f).margin(6f)
+                }
+              }
+              Failed -> {
+                github.image(HeAssets.networkError).size(32f).pad(4f)
+                github.add(Core.bundle["dialog.mods.loginFailed"], Styles.outlineLabel).padLeft(8f)
+                github.button(Core.bundle["misc.retry"], Styles.cleart){
+                  onLogin()
+                  rebuildList()
+                }.pad(4f).margin(6f)
+              }
+            }
+          }.growX().padLeft(20f).padRight(20f).margin(8f)
+          list.row()
+
+          list.cullTable { fav ->
+            if (favoritesLoadFailed) {
+              fav.table { tab ->
+                tab.image(HeAssets.networkError).size(46f).color(Color.red)
+                tab.add(Core.bundle["dialog.mods.favoritesFailed"], Styles.outlineLabel).pad(36f).padLeft(12f)
+                tab.button(Core.bundle["misc.retry"], Styles.cleart) { reloadFavorites() }.margin(6f)
+              }.fill().colspan(n)
+              fav.row()
+            }
+            else if (favoritesMods.isEmpty && favoriteRepos.isEmpty) {
               fav.table { tab ->
                 tab.image(Icon.box).size(46f).color(Pal.accent)
                 tab.add(Core.bundle["dialog.mods.noFavorites"]).pad(36f).padLeft(12f)
@@ -421,9 +434,10 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
               fav.row()
             }
 
-            fav.defaults().width(min(540f, (Core.graphics.width - 80f)/Scl.scl())).fillY().pad(6f)
             favCols = Array(n) {
-              fav.cullTable(HeAssets.grayUIAlpha) { it.top().defaults().growX().fillY() }.get()
+              fav.cullTable(HeAssets.grayUIAlpha) {
+                it.top().defaults().growX().fillY()
+              }.width(min(540f, (Core.graphics.width - 80f)/Scl.scl())).fillY().pad(6f).get()
             }
           }
           list.row()
@@ -432,9 +446,10 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
           list.line(Pal.accent, true, 4f).pad(6f).padLeft(20f).padRight(20f)
           list.row()
           list.cullTable { norm ->
-            norm.top().defaults().width(min(540f, (Core.graphics.width - 80f)/Scl.scl())).fillY().pad(6f)
             normCols = Array(n) {
-              norm.cullTable(HeAssets.grayUIAlpha) { it.top().defaults().growX().fillY() }.get()
+              norm.cullTable(HeAssets.grayUIAlpha) {
+                it.top().defaults().growX().fillY()
+              }.width(min(540f, (Core.graphics.width - 80f)/Scl.scl())).fillY().pad(6f).get()
             }
           }
           getModList(
@@ -447,6 +462,8 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
           ) { ls ->
             var favI = 0
             var normI = 0
+
+            resolveFavoriteNames(ls)
 
             ls.values()
               .filter {
@@ -467,43 +484,14 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
               }
               .forEach { m ->
                 val col =
-                  if (favoritesMods.contains(Name(m))) favCols!![favI++%n]
+                  if (isFavorite(m)) favCols!![favI++%n]
                   else normCols!![normI++%n]
                 val tab = buildModTab(m)
 
-                col.add(tab).growX().fillY().pad(4f).row()
+                col.add(tab).growX().fillY().pad(4f).minWidth(0f).row()
               }
           }
         }
-
-        //rebuildFavorites = rebuildFavorites@{
-        //  favoriteStatus = if (!GithubAPI.usable()) NonLogin else Loading
-        //  favoritesMods.clear()
-        //  rebuildList()
-//
-        //  if (!GithubAPI.usable()) return@rebuildFavorites
-        //  GithubAPI.listStarred({ err ->
-        //    favoriteStatus = Error
-        //    rebuildList()
-        //    Log.err(err)
-        //  }) { list ->
-        //    list.asArray().forEach { raw ->
-        //      val topics = raw.get("topics").asArray()
-        //      if (topics.contains { it.asString().contains("mindustry-mod") }){
-        //        val repo = raw.getString("full_name")
-        //        val bi = repo.split("/")
-        //        val author = bi[0].lowercase()
-        //        val name = bi[1].lowercase()
-        //        val modName = Name(author, name)
-//
-        //        favoritesMods.add(modName)
-        //      }
-        //    }
-//
-        //    favoriteStatus = Ready
-        //    rebuildList()
-        //  }
-        //}
 
         rebuildList()
       }, Styles.smallPane)).growY().fillX()
@@ -530,10 +518,62 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
       }.growX().fillY()
     }.grow()
 
-    // 已登录 GitHub 时，改用账号 Star 作为收藏夹：异步覆盖本地缓存，完成后重建列表
     if (favoritesMode == FavoritesMode.Github) {
       refreshFavorites { rebuildFavoritesView() }
     }
+  }
+
+  private fun onLogin() {
+    var codePane: Dialog? = null
+
+    loginGithub(
+      onCode = { code ->
+        runOnMain {
+          Core.app.clipboardText = code.userCode
+
+          codePane = UIUtils.showPane(
+            Core.bundle["dialog.mods.logining"],
+            ButtonEntry(
+              Core.bundle["misc.cancel"],
+              Icon.cancelSmall
+            ){
+              cancelGithubLogin()
+              it.hide()
+              rebuildList()
+            }
+          ){ i ->
+            i.add(Core.bundle["dialog.mods.copyCode"]).growX().fillY().minWidth(500f).wrap()
+            i.row()
+            i.table { c ->
+              c.add(code.userCode, Styles.outlineLabel).fontScale(2.5f)
+              c.button(Icon.copySmall, Styles.clearNonei, 24f) {
+                Core.app.clipboardText = code.userCode
+              }.margin(4f).top().left()
+            }.fill().padTop(20f)
+            i.row()
+            i.add(Core.bundle.format("dialog.mods.codeVaildTime", code.expiresIn/60))
+              .color(Color.lightGray).padTop(6f).padBottom(18f)
+          }
+
+          codePane.hidden { cancelGithubLogin() }
+
+          rebuildList()
+        }
+      },
+      // 这两个回调会 hide() 对话框并重建列表，都是在动场景图，必须钉在主线程
+      onError = {
+        runOnMain {
+          codePane?.hide()
+          rebuildList()
+        }
+      },
+      onDone = {
+        runOnMain {
+          codePane?.hide()
+          rebuildList()
+        }
+      }
+    )
   }
 
   private fun importFavorites() {
@@ -625,11 +665,11 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
         top.stack(
           Table { info ->
             info.left().top().margin(12f).marginLeft(6f).defaults().left()
-            info.add(mod.name).color(Pal.accent).growX().labelAlign(Align.left).padRight(160f).wrap()
+            info.add(mod.name).color(Pal.accent).growX().labelAlign(Align.left).padRight(160f).wrap(true)
             info.row()
-            info.add(mod.version, 0.8f).color(Color.lightGray).growX().padRight(50f).wrap()
+            info.add(mod.version, 0.8f).color(Color.lightGray).growX().padRight(50f).wrap(true)
             info.row()
-            info.add(mod.shortDescription()).growY().growX().padRight(50f).wrap()
+            info.add(mod.shortDescription()).growY().growX().padRight(50f).wrap(true)
           },
           Table { over ->
             over.right()
@@ -655,48 +695,15 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
               side.line(Color.darkGray, false, 3f)
               side.table { buttons ->
                 buttons.defaults().size(48f)
-                // TODO 对接挂点（暂未接入界面）：登录 GitHub 后应改为调用
-                //   toggleFavorite(mod,
-                //     onError = { e -> Core.app.post { UIUtils.showException(e, Core.bundle["infos.handleFailed"]); Log.err(e) } },
-                //     onResult = { rebuildList() })
-                // 当前仍直接读写本地离线收藏夹（favoritesMods + saveFavorites）。
                 buttons.button(Icon.star, Styles.clearNonei, 24f) {
-                  if (!favoritesMods.add(modName)) favoritesMods.remove(modName)
-                  saveFavorites()
-
-                  rebuildList()
-                  //if (favoritesMods.contains(modName)) {
-                  //  GithubAPI.unstar(
-                  //    mod.repo,
-                  //    { e ->
-                  //      Core.app.post {
-                  //        UIUtils.showException(e, Core.bundle["infos.handleFailed"])
-                  //        Log.err(e)
-                  //      }
-                  //    }
-                  //  ) {
-                  //    Core.app.post {
-                  //      favoritesMods.remove(modName)
-                  //      rebuildList()
-                  //    }
-                  //  }
-                  //}
-                  //else {
-                  //  GithubAPI.star(
-                  //    mod.repo,
-                  //    { e ->
-                  //      Core.app.post {
-                  //        UIUtils.showException(e, Core.bundle["infos.handleFailed"])
-                  //        Log.err(e)
-                  //      }
-                  //    }
-                  //  ) {
-                  //    Core.app.post {
-                  //      favoritesMods.add(modName)
-                  //      rebuildList()
-                  //    }
-                  //  }
-                  //}
+                  toggleFavorite(
+                    mod,
+                    onError = { e ->
+                      UIUtils.showException(e, Core.bundle["dialog.mods.starFailed"])
+                      Log.err(e)
+                    },
+                    onResult = { rebuildList() }
+                  )
                 }.update { b ->
                   b.image.setScale(0.9f)
                   b.style.imageUpColor = if (favoritesMods.contains(modName)) Pal.accent else Color.white
@@ -730,7 +737,7 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
         details.left().defaults().growX().pad(4f).padLeft(12f).padRight(12f)
 
         details.add(Core.bundle.format("dialog.mods.author", mod.author))
-          .growX().padRight(50f).wrap().color(Pal.accent).labelAlign(Align.left)
+          .growX().padRight(50f).wrap(true).color(Pal.accent).labelAlign(Align.left)
         details.row()
         details.table { link ->
           link.left().image(Icon.githubSmall).scaling(Scaling.fit).size(24f).color(Color.lightGray)
@@ -784,7 +791,7 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
 
             when (i) {
               0 -> desc.add(Markdown(mod.description?:"", MarkdownStyles.defaultMD))
-              1 -> desc.add(mod.description).wrap()
+              1 -> desc.add(mod.description).wrap(true)
             }
           }
         }.grow().margin(12f).padTop(0f)
@@ -814,11 +821,4 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
       super.drawChildren()
     }
   }
-
-  //private enum class FavoritesStatus{
-  //  NonLogin,
-  //  Loading,
-  //  Ready,
-  //  Error,
-  //}
 }

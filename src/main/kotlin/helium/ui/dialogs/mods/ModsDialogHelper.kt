@@ -56,6 +56,9 @@ import kotlinx.coroutines.Job
 
 object ModsDialogHelper {
   private val exec: ExecutorService = Threads.unboundedExecutor("HTTP", 1)
+
+  /** 模组索引缓存：跨线程读写，必须 volatile（主线程读、HTTP 线程写） */
+  @Volatile
   var modList: OrderedMap<Name, ModListing>? = null
     private set
 
@@ -293,7 +296,6 @@ object ModsDialogHelper {
         req.block { response ->
           val strResult = response.resultAsString
           try {
-            modList = OrderedMap()
             val list = JsonIO.json.fromJson(Seq::class.java, ModListing::class.java, strResult) as Seq<ModListing>
             val d = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'")
             val parser = Func { text: String ->
@@ -305,10 +307,19 @@ object ModsDialogHelper {
             }
 
             list.sortComparing { m -> parser.get(m!!.lastUpdated) }.reverse()
-            list.forEach { modList!![Name(it)] = it }
+
+            // 先填完再发布缓存。
+            // 以前是 `modList = OrderedMap()` 之后才开始解析填充，中间这段时间其它线程会看到
+            // "非 null 但空"的缓存，于是 line 268 的快速路径直接渲染出空列表，而且不会再有回调来救它。
+            // 未登录时首次打开最容易撞上：登录态下 refreshFavorites 完成后会再重建一次列表，
+            // 那时缓存已经填好，于是把问题掩盖了过去。
+            val parsed = OrderedMap<Name, ModListing>()
+            list.forEach { parsed[Name(it)] = it }
+
+            modList = parsed
 
             Core.app.post {
-              listener.get(modList)
+              listener.get(parsed)
             }
           } catch (e: Exception) {
             Core.app.post {

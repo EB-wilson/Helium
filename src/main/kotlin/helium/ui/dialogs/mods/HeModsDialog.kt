@@ -339,11 +339,11 @@ class HeModsDialog: AttachableDialog(
       top.stack(
         Table{ info ->
           info.left().top().margin(12f).marginLeft(6f).defaults().left()
-          info.add(mod.meta.displayName).color(Pal.accent).grow().padRight(160f).wrap()
+          info.add(mod.meta.displayName).color(Pal.accent).grow().padRight(160f).wrap(true)
           info.row()
-          info.add(mod.meta.version, 0.8f).color(Color.lightGray).grow().padRight(50f).wrap()
+          info.add(mod.meta.version, 0.8f).color(Color.lightGray).grow().padRight(50f).wrap(true)
           info.row()
-          info.add(mod.meta.shortDescription()).grow().padRight(50f).wrap()
+          info.add(mod.meta.shortDescription()).grow().padRight(50f).wrap(true)
         },
         Table{ over ->
           over.right()
@@ -439,7 +439,7 @@ class HeModsDialog: AttachableDialog(
             details.left().defaults().growX().pad(4f).padLeft(12f).padRight(12f)
 
             details.add(Core.bundle.format("dialog.mods.author", mod.meta.author))
-              .growX().padRight(50f).wrap().color(Pal.accent).labelAlign(Align.left)
+              .growX().padRight(50f).wrap(true).color(Pal.accent).labelAlign(Align.left)
             details.row()
             details.table { link ->
               buildLinkButton(link, Name(mod))
@@ -491,7 +491,7 @@ class HeModsDialog: AttachableDialog(
 
                 when (i) {
                   0 -> desc.add(Markdown(mod.meta.description ?: "", MarkdownStyles.defaultMD))
-                  1 -> desc.add(mod.meta.description ?: "").wrap()
+                  1 -> desc.add(mod.meta.description ?: "").wrap(true)
                   2 -> setupContentsList(desc, contents)//Core.app.post { setupContentsList(desc, contents) }
                 }
               }

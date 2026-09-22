@@ -763,11 +763,11 @@ class ModPackerDialog: BaseDialog(Core.bundle["dialog.modPacker.title"]) {
       top.stack(
         Table{ info ->
           info.left().top().margin(12f).marginLeft(6f).defaults().left()
-          info.add(mod.displayName).color(Pal.accent).grow().padRight(160f).wrap()
+          info.add(mod.displayName).color(Pal.accent).grow().padRight(160f).wrap(true)
           info.row()
-          info.add(mod.version, 0.8f).color(Color.lightGray).grow().padRight(50f).wrap()
+          info.add(mod.version, 0.8f).color(Color.lightGray).grow().padRight(50f).wrap(true)
           info.row()
-          info.add(mod.shortDesc).grow().padRight(50f).wrap()
+          info.add(mod.shortDesc).grow().padRight(50f).wrap(true)
         },
         Table{ over ->
           over.right()
@@ -808,7 +808,7 @@ class ModPackerDialog: BaseDialog(Core.bundle["dialog.modPacker.title"]) {
         details.left().defaults().growX().pad(4f).padLeft(12f).padRight(12f)
 
         details.add(Core.bundle.format("dialog.mods.author", mod.author))
-          .growX().padRight(50f).wrap().color(Pal.accent).labelAlign(Align.left)
+          .growX().padRight(50f).wrap(true).color(Pal.accent).labelAlign(Align.left)
         details.row()
         details.table { link ->
           buildLinkButton(link, Name(mod.author, mod.name))
@@ -843,7 +843,7 @@ class ModPackerDialog: BaseDialog(Core.bundle["dialog.modPacker.title"]) {
 
             when (i) {
               0 -> desc.add(Markdown(mod.description ?: "", MarkdownStyles.defaultMD))
-              1 -> desc.add(mod.description ?: "").wrap()
+              1 -> desc.add(mod.description ?: "").wrap(true)
               2 -> setupContentsList(desc, contents)
             }
           }

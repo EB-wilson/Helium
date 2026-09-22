@@ -113,7 +113,7 @@ object UIUtils {
         info.line(Pal.accent, true, 3f).padTop(4f).padLeft(-6f).padRight(-6f)
         info.row()
       }
-      info.pane(build).grow().minSize(380f, 120f).pad(12f)
+      info.pane(build).grow().minSize(380f, 120f).pad(12f).scrollX(false)
       info.row()
       info.table { but ->
         but.defaults().growX().height(46f).minWidth(82f).pad(4f)
