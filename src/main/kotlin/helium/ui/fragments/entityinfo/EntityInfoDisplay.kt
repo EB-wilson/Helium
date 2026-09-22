@@ -109,33 +109,16 @@ open class TargetGroup<T: Entityc>(private val target: Field) {
     private val EntityGroup<Entityc>.indexer: EntityIndexer? by accessField("indexer")
     private var EntityGroup<Entityc>.map: IntMap<Entityc>? by accessField("map")
     private var EntityGroup<Entityc>.tree: QuadTree<QuadTree.QuadTreeObject>? by accessField("tree")
-    private var PhysicsProcess.group: EntityGroup<Unit> by accessField("group")
 
     val all = TargetGroup<Entityc>(Groups::class.java.getField("all"))
 
     val build = TargetGroup<Building>(Groups::class.java.getField("build"))
     val bullet = TargetGroup<Bullet>(Groups::class.java.getField("bullet"))
     val draw = TargetGroup<Drawc>(Groups::class.java.getField("draw"))
-    val fire = TargetGroup<Fire>(Groups::class.java.getField("fire"))
-    val label = TargetGroup<WorldLabel>(Groups::class.java.getField("label"))
     val player = TargetGroup<Player>(Groups::class.java.getField("player"))
     val powerGraph = TargetGroup<PowerGraphUpdaterc>(Groups::class.java.getField("powerGraph"))
-    val puddle = TargetGroup<Puddle>(Groups::class.java.getField("puddle"))
     val sync = TargetGroup<Syncc>(Groups::class.java.getField("sync"))
-    val unit = object: TargetGroup<Unit>(Groups::class.java.getField("unit")){
-      override fun reset() {
-        super.reset()
-        Vars.asyncCore.processes
-          .filterIsInstance<PhysicsProcess>()
-          .first().group = Groups.unit
-      }
-      override fun apply(put: Cons<Unit>, remove: Cons<Unit>, clear: Runnable) {
-        super.apply(put, remove, clear)
-        Vars.asyncCore.processes
-          .filterIsInstance<PhysicsProcess>()
-          .first().group = Groups.unit
-      }
-    }
+    val unit = TargetGroup<Unit>(Groups::class.java.getField("unit"))
     val weather = TargetGroup<WeatherState>(Groups::class.java.getField("weather"))
   }
 

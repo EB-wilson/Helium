@@ -124,7 +124,8 @@ object He {
     heShield = ShieldRenderer()
     //heShield.setup()
 
-    //GithubAPI.init()
+    //恢复上次的 GitHub 登录会话（若有），供 mod 收藏夹使用
+    GithubAPI.init()
 
     HeAssets.load()
     HeShaders.load()

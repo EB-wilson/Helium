@@ -56,12 +56,41 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
       add(CullTable(background).also { t -> build?.also { it.get(t) } })
   }
 
-  //private var favoriteStatus = FavoritesStatus.NonLogin
+  /** 收藏夹的数据来源。 */
+  enum class FavoritesMode {
+    /** 未登录 GitHub：使用本地存档，离线可用 */
+    Local,
+    /** 已登录 GitHub：使用该账号的仓库 Star 作为收藏夹 */
+    Github,
+  }
+
+  /**
+   * 收藏夹加载状态，供界面按状态切换提示文本：
+   * 对应 bundle 的 `dialog.mods.shouldLogin` / `dialog.mods.loading` / `dialog.mods.noFavorites` / `dialog.mods.checkFailed`。
+   */
+  enum class FavoritesStatus {
+    /** 离线模式，未登录 GitHub */
+    NonLogin,
+    /** 正在拉取账号 Star */
+    Loading,
+    /** 数据就绪 */
+    Ready,
+    /** 拉取失败 */
+    Error,
+  }
+
   private lateinit var rebuildList: () -> Unit
-  //private lateinit var rebuildFavorites: () -> Unit
 
   private val browserTabs = ObjectMap<ModListing, Table>()
+
+  /** 收藏的 mod：离线模式来自本地存档，GitHub 模式来自账号 Star */
   private val favoritesMods = ObjectSet<Name>()
+
+  /** 收藏的仓库全名（`owner/repo`，小写）。与 [favoritesMods] 同步维护，用于按仓库地址精确匹配 */
+  private val favoriteRepos = ObjectSet<String>()
+
+  private var favoriteStatus = FavoritesStatus.NonLogin
+  private var favoritesLoading = false
 
   private var search = ""
   private var orderDate = false
@@ -73,22 +102,70 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
     resized(::rebuild)
   }
 
+  // =============================================================================================
+  // 收藏夹挂点（离线 / GitHub 双实现）
+  //
+  // 说明：界面尚未对接，以下函数即为对接入口。
+  //  - 状态查询：favoritesMode / githubLoggedIn / githubUser / currentFavoritesStatus
+  //              / isFavorite / favoriteRepoList
+  //  - 行为挂点：reloadFavorites / toggleFavorite / loginGithub / logoutGithub / cancelGithubLogin
+  // =============================================================================================
+
+  /** @return 当前收藏夹实现：登录 GitHub 后自动切换为账号 Star */
+  val favoritesMode: FavoritesMode
+    get() = if (GithubAPI.usable()) FavoritesMode.Github else FavoritesMode.Local
+
+  /** @return 当前是否已登录 GitHub */
+  val githubLoggedIn: Boolean get() = GithubAPI.usable()
+
+  /** @return 当前登录的 GitHub 账号，未登录时为 null */
+  val githubUser: GithubAPI.GithubUser? get() = GithubAPI.currUser()
+
+  /** @return 收藏夹加载状态，供界面展示对应提示 */
+  val currentFavoritesStatus: FavoritesStatus get() = favoriteStatus
+
+  /** @return 某个 mod 是否已收藏（按当前模式判断） */
+  fun isFavorite(mod: ModListing): Boolean =
+    favoritesMods.contains(Name(mod)) || favoriteRepos.contains(mod.repo.lowercase())
+
+  /** @return 某个 mod 是否已收藏 */
+  fun isFavorite(name: Name): Boolean = favoritesMods.contains(name)
+
+  /** @return 当前收藏夹内的仓库全名（`owner/repo`，小写） */
+  fun favoriteRepoList(): List<String> {
+    val result = ArrayList<String>(favoriteRepos.size)
+    favoriteRepos.forEach { result.add(it) }
+
+    return result
+  }
+
+  /**
+   * 读取本地离线收藏夹（不访问网络）。这是「离线模式」的收藏夹实现。
+   */
   fun loadFavorites(){
     favoritesMods.clear()
+    favoriteRepos.clear()
 
     val listRaw = He.global.getString("favorite-mods", "none")
 
     if (listRaw == "none" || listRaw.isNullOrBlank()) return
     val list = Jval.read(listRaw).asArray()
     list.forEach{
-      val author = it.getString("author")
-      val name = it.getString("name")
+      val author = it.getString("author") ?: ""
+      val name = it.getString("name") ?: ""
 
       favoritesMods.add(Name(author, name))
+      favoriteRepos.add("${author.lowercase()}/${name.lowercase()}")
     }
   }
 
+  /**
+   * 保存本地离线收藏夹。这是「离线模式」的收藏夹实现；
+   * GitHub 模式下收藏状态由账号 Star 决定，不写本地存档。
+   */
   fun saveFavorites() {
+    if (favoritesMode == FavoritesMode.Github) return
+
     val list = Jval.newArray()
     favoritesMods.forEach {
       val mod = Jval.newObject()
@@ -98,6 +175,158 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
       list.add(mod)
     }
     He.global.put("favorite-mods", list.toString())
+  }
+
+  /**
+   * 按当前模式刷新收藏夹数据（不改动界面）。
+   * - 离线模式：直接读取本地存档；
+   * - GitHub 模式：拉取登录账号的 Star 仓库（仅 topics 含 `mindustry-mod` 的仓库）。
+   *
+   * @param onDone 主线程回调，数据刷新完成后触发
+   */
+  fun refreshFavorites(onDone: () -> Unit = {}) {
+    if (favoritesMode == FavoritesMode.Local) {
+      loadFavorites()
+      favoriteStatus = FavoritesStatus.NonLogin
+      onDone()
+      return
+    }
+
+    if (favoritesLoading) return
+
+    favoritesLoading = true
+    favoriteStatus = FavoritesStatus.Loading
+
+    GithubAPI.listStarredRepos(
+      errorHandler = { error ->
+        favoritesLoading = false
+        favoriteStatus = FavoritesStatus.Error
+
+        Log.err(error)
+        onDone()
+      }
+    ) { repos ->
+      favoritesLoading = false
+      favoritesMods.clear()
+      favoriteRepos.clear()
+
+      repos.forEach { repo ->
+        favoriteRepos.add(repo)
+
+        val bi = repo.split("/")
+        if (bi.size == 2) favoritesMods.add(Name(bi[0], bi[1]))
+      }
+
+      favoriteStatus = FavoritesStatus.Ready
+      onDone()
+    }
+  }
+
+  /**
+   * 刷新收藏夹并重建列表，界面上的「刷新」按钮可直接挂这里。
+   */
+  fun reloadFavorites() {
+    refreshFavorites { rebuildFavoritesView() }
+  }
+
+  /**
+   * 切换某个 mod 的收藏状态。
+   * - 离线模式：读写本地存档；
+   * - GitHub 模式：调用 star / unstar 接口，成功后同步内存缓存。
+   *
+   * @param onError 主线程回调，失败时触发（界面可据此提示）
+   * @param onResult 主线程回调，参数为切换后的收藏状态
+   */
+  fun toggleFavorite(
+    mod: ModListing,
+    onError: Cons<Throwable> = Cons{},
+    onResult: Cons<Boolean> = Cons{},
+  ) {
+    val name = Name(mod)
+    val repo = mod.repo
+    val lower = repo.lowercase()
+
+    if (favoritesMode == FavoritesMode.Local) {
+      val nowFavorite = if (favoritesMods.contains(name)) {
+        favoritesMods.remove(name)
+        favoriteRepos.remove(lower)
+        false
+      }
+      else {
+        favoritesMods.add(name)
+        favoriteRepos.add(lower)
+        true
+      }
+
+      saveFavorites()
+      onResult.get(nowFavorite)
+      return
+    }
+
+    if (!GithubAPI.usable()) {
+      onError.get(IllegalStateException("no github session"))
+      return
+    }
+
+    if (favoritesMods.contains(name) || favoriteRepos.contains(lower)) {
+      GithubAPI.unstar(repo, { error -> onError.get(error) }) {
+        Core.app.post {
+          favoritesMods.remove(name)
+          favoriteRepos.remove(lower)
+          onResult.get(false)
+        }
+      }
+    }
+    else {
+      GithubAPI.star(repo, { error -> onError.get(error) }) {
+        Core.app.post {
+          favoritesMods.add(name)
+          favoriteRepos.add(lower)
+          onResult.get(true)
+        }
+      }
+    }
+  }
+
+  /**
+   * 登录挂点：唤起系统浏览器打开 GitHub 认证页，并等待用户授权。
+   *
+   * @param onCode 主线程回调，界面应在此展示用户码 `device.userCode`
+   * @param onError 主线程回调，登录失败
+   * @param onDone 主线程回调，登录成功后触发，参数为登录账号
+   */
+  fun loginGithub(
+    onCode: Cons<GithubAPI.DeviceLogin> = Cons{},
+    onError: Cons<Throwable> = Cons{},
+    onDone: Cons<GithubAPI.GithubUser> = Cons{},
+  ) {
+    GithubAPI.startLogin(
+      openBrowser = true,
+      onCode = onCode,
+      onError = onError,
+      onSuccess = { user ->
+        refreshFavorites { rebuildFavoritesView() }
+        onDone.get(user)
+      }
+    )
+  }
+
+  /** 取消正在进行的 GitHub 登录（用户关闭授权界面时调用）。 */
+  fun cancelGithubLogin() {
+    GithubAPI.cancelLogin()
+  }
+
+  /** 退出 GitHub 登录，并回落到本地离线收藏夹。 */
+  fun logoutGithub() {
+    GithubAPI.logout()
+    loadFavorites()
+    favoriteStatus = FavoritesStatus.NonLogin
+    rebuildFavoritesView()
+  }
+
+  /** 供界面挂点安全重建收藏夹列表（界面尚未构建时不做事）。 */
+  private fun rebuildFavoritesView() {
+    if (::rebuildList.isInitialized) rebuildList()
   }
 
   fun rebuild(){
@@ -300,6 +529,11 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
         }
       }.growX().fillY()
     }.grow()
+
+    // 已登录 GitHub 时，改用账号 Star 作为收藏夹：异步覆盖本地缓存，完成后重建列表
+    if (favoritesMode == FavoritesMode.Github) {
+      refreshFavorites { rebuildFavoritesView() }
+    }
   }
 
   private fun importFavorites() {
@@ -421,6 +655,11 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
               side.line(Color.darkGray, false, 3f)
               side.table { buttons ->
                 buttons.defaults().size(48f)
+                // TODO 对接挂点（暂未接入界面）：登录 GitHub 后应改为调用
+                //   toggleFavorite(mod,
+                //     onError = { e -> Core.app.post { UIUtils.showException(e, Core.bundle["infos.handleFailed"]); Log.err(e) } },
+                //     onResult = { rebuildList() })
+                // 当前仍直接读写本地离线收藏夹（favoritesMods + saveFavorites）。
                 buttons.button(Icon.star, Styles.clearNonei, 24f) {
                   if (!favoritesMods.add(modName)) favoritesMods.remove(modName)
                   saveFavorites()

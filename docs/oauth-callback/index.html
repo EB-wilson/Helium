@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="color-scheme" content="dark light">
+  <title>授权完成 · Helium</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --card: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #2ea043;
+      --accent-soft: rgba(46, 160, 67, .15);
+      --danger: #f85149;
+      --danger-soft: rgba(248, 81, 73, .15);
+    }
+
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f6f8fa;
+        --card: #ffffff;
+        --border: #d0d7de;
+        --text: #1f2328;
+        --muted: #656d76;
+      }
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      height: 100%;
+      margin: 0;
+    }
+
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                   "Hiragino Sans GB", "Microsoft YaHei", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .card {
+      width: 100%;
+      max-width: 520px;
+      padding: 40px 32px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      text-align: center;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, .28);
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 72px;
+      height: 72px;
+      margin-bottom: 20px;
+      border-radius: 50%;
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+
+    .badge svg {
+      width: 36px;
+      height: 36px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 22px;
+      font-weight: 600;
+    }
+
+    .subtitle {
+      margin: 0 0 24px;
+      font-size: 13px;
+      letter-spacing: .02em;
+      color: var(--muted);
+    }
+
+    p {
+      margin: 0 0 12px;
+      font-size: 15px;
+    }
+
+    .hint {
+      margin-top: 24px;
+      padding-top: 20px;
+      border-top: 1px solid var(--border);
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    button {
+      margin-top: 20px;
+      padding: 10px 22px;
+      font: inherit;
+      font-size: 14px;
+      color: #ffffff;
+      background: var(--accent);
+      border: 0;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+
+    button:hover { filter: brightness(1.1); }
+    button:active { filter: brightness(.95); }
+
+    a {
+      color: inherit;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+
+    /* 出错时（?error=...）的红色状态 */
+    body.is-error .badge {
+      background: var(--danger-soft);
+      color: var(--danger);
+    }
+
+    body.is-error button { display: none; }
+
+    code {
+      padding: 2px 6px;
+      font-size: 12px;
+      background: rgba(127, 127, 127, .16);
+      border-radius: 6px;
+      word-break: break-all;
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="badge" aria-hidden="true">
+      <svg id="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <path id="icon-path" d="M20 6 9 17l-5-5"></path>
+      </svg>
+    </div>
+
+    <h1 id="title">授权完成</h1>
+    <p class="subtitle" id="subtitle">Authorization complete</p>
+
+    <p id="message">您现在可以关闭此浏览器窗口，返回游戏继续操作。</p>
+    <p id="message-en" class="subtitle" style="margin-bottom:0">
+      You can now close this browser tab and return to the game.
+    </p>
+
+    <button type="button" onclick="tryClose()">关闭此窗口</button>
+
+    <p class="hint">
+      本页面仅用于满足 GitHub OAuth App 的「Authorization callback URL」必填项。
+      Helium 使用的是 <strong>设备码流程（Device Flow）</strong>，
+      浏览器不会把授权结果回传到这里，因此直接关掉本页即可。<br>
+      如果浏览器阻止了自动关闭，请手动关闭标签页。
+    </p>
+  </main>
+
+  <script>
+    // 正常情况下设备码流程不会带任何参数回到本页。
+    // 这里只是做一层兜底：万一被当作普通回调地址使用，也能给出可读的提示。
+    (function () {
+      var params = new URLSearchParams(location.search);
+      var error = params.get('error');
+      var code = params.get('code');
+
+      if (!error && !code) return;
+
+      var lines = [];
+
+      if (error) {
+        // 真正的失败状态：换红色图标，并隐藏「关闭此窗口」按钮
+        document.body.classList.add('is-error');
+        document.getElementById('icon-path').setAttribute('d', 'M18 6 6 18M6 6l12 12');
+        document.getElementById('title').textContent = '授权未完成';
+        document.getElementById('subtitle').textContent = 'Authorization failed';
+
+        lines.push('GitHub 返回了错误：<code>' + escapeHtml(error) + '</code>');
+        var desc = params.get('error_description');
+        if (desc) lines.push(escapeHtml(desc));
+        lines.push('请返回游戏重新发起登录。');
+      } else {
+        document.getElementById('title').textContent = '收到授权码';
+        document.getElementById('subtitle').textContent = 'Authorization code received';
+
+        lines.push('已收到授权码 <code>' + escapeHtml(code.slice(0, 8)) + '…</code>。');
+        lines.push('Helium 使用设备码流程，正常情况下不会跳转到本页，此授权码不会被使用。');
+      }
+
+      document.getElementById('message').innerHTML = lines.join('<br>');
+      document.getElementById('message-en').style.display = 'none';
+    })();
+
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, function (ch) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
+      });
+    }
+
+    function tryClose() {
+      window.close();
+      // window.close() 对非脚本打开的窗口无效，此时给出提示
+      setTimeout(function () {
+        document.querySelector('.hint').innerHTML =
+          '浏览器阻止了自动关闭，请手动关闭此标签页。<br>' +
+          '本页面只是 OAuth App 回调地址的占位页，关闭它不影响登录。';
+      }, 250);
+    }
+  </script>
+</body>
+</html>
