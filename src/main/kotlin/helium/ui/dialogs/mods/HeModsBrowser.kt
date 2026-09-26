@@ -293,8 +293,6 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
             }
           }
 
-          // 收藏夹行的收纳浮窗只向下展开，默认的绘制顺序（先加先画）会让它被下方的模组卡片盖住。
-          // 反转列表子元素的遍历顺序，使浮窗所在的收藏夹行比其下方的元素更晚绘制，从而显示在最上层。
           list.children.reverse()
         }
 
@@ -569,7 +567,6 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
         Icon.ok,
         disabled = { isFavoritesNameUnavailable(name, exclude) }
       ) { d ->
-        // 禁用只是界面表现，这里再判一次，绝不让重名写进去
         if (!isFavoritesNameUnavailable(name, exclude)) {
           onConfirm(name.trim())
           d.hide()
@@ -606,7 +603,6 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
     if (folder !is LocalFavorites || folder.name == name) return
     if (isFavoritesNameTaken(name, folder)) return
 
-    // 名称是只读的：重命名 = 用新名称重建一个本地收藏夹，并顶替它原来的位置
     val renamed = LocalFavorites(name)
     renamed.replaceAll(folder.modList)
 
@@ -661,12 +657,6 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
     }
   }
 
-  /**
-   * 批量下载并安装整个收藏夹的内容。
-   *
-   * 只有能在 mod 索引里解析出来的条目才会进入列表（和收藏夹分栏里显示的内容一致），
-   * 其中不可用的 mod 由 [showDownloadAllDialog] 再过滤掉。
-   */
   private fun installAllFavorites(folder: AbstractFavorites) {
     if (folder.isEmpty) {
       UIUtils.showTip(null, Core.bundle["dialog.mods.noFavorites"])
@@ -743,13 +733,11 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
   private fun importFavorites() {
     var favName = ""
     var favText = ""
-    // 收藏夹文本里解析出的名称；输入框留空时以它为准
     var serialName: String? = null
     var nameField: TextField? = null
 
     fun effectiveName(): String = favName.trim().ifBlank { serialName?.trim().orEmpty() }
 
-    // GitHub Star 的名称是保留名称，导入同样不能占用
     fun unavailable(): Boolean = effectiveName() == githubStarFavoritesName
 
     UIUtils.showPane(
@@ -813,7 +801,6 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
       return
     }
 
-    // 兜底：正常路径下确认按钮已被禁用
     if (favName == githubStarFavoritesName) {
       UIUtils.showTip(null, Core.bundle["dialog.mods.favNameUnavailable"])
       return
@@ -1051,7 +1038,6 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
       buttons.button(Icon.star, Styles.clearNonei, 24f) {
         val owner = favoriteOwner
 
-        // 收藏夹分栏内的卡片：强调色按钮只负责把此 mod 移出所在的收藏夹
         if (owner != null) {
           owner.removeMod(modName)
           rebuildList()
@@ -1059,7 +1045,6 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
         else showAddToFavoritesDialog(mod)
       }.update { b ->
         b.image.setScale(0.9f)
-        // 不再按"是否被收藏"着色：只有已登录且该 mod 已被 Star 时才用强调色
         b.style.imageUpColor = when {
           favoriteOwner != null -> Pal.accent
           githubFavorites?.contains(mod) == true -> Pal.accent

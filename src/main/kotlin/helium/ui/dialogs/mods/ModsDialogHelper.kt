@@ -17,11 +17,9 @@ import arc.scene.ui.layout.Table
 import arc.struct.OrderedMap
 import arc.struct.Seq
 import arc.util.Align
-import arc.util.Http
 import arc.util.Log
 import arc.util.Scaling
 import arc.util.Strings
-import arc.util.Threads
 import arc.util.Time
 import arc.util.serialization.Jval
 import helium.He
@@ -29,6 +27,7 @@ import helium.set
 import helium.ui.ButtonEntry
 import helium.ui.HeAssets
 import helium.ui.UIUtils
+import helium.util.Post
 import helium.util.CLIENT_ONLY
 import helium.util.DEPRECATED
 import helium.util.Downloader
@@ -48,18 +47,33 @@ import mindustry.io.JsonIO
 import mindustry.mod.Mods
 import mindustry.ui.Bar
 import mindustry.ui.Styles
-import java.lang.NumberFormatException
 import java.text.SimpleDateFormat
 import java.util.Date
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Future
-import kotlin.jvm.Throws
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineName
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 
 object ModsDialogHelper {
-  private val exec: ExecutorService = Threads.unboundedExecutor("HTTP", 1)
+  private val listScope = CoroutineScope(
+    SupervisorJob()
+    + Dispatchers.IO
+    + CoroutineName("helium-mod-list")
+  )
 
-  /** 模组索引缓存：跨线程读写，必须 volatile（主线程读、HTTP 线程写） */
+  private val listLock = Any()
+  private var listDeferred: Deferred<OrderedMap<Name, ModListing>>? = null
+
   @Volatile
   var modList: OrderedMap<Name, ModListing>? = null
     private set
@@ -259,8 +273,6 @@ object ModsDialogHelper {
     modList = null
   }
 
-  object Lock
-  @Suppress("UNCHECKED_CAST")
   fun getModList(
     index: Int = 0,
     refresh: Boolean = false,
@@ -268,64 +280,74 @@ object ModsDialogHelper {
     listener: Cons<OrderedMap<Name, ModListing>>,
   ) {
     if (index >= He.modJsonURLs.size) return
-    if (refresh) modList = null
+    if (refresh) resetModListCache()
 
-    if (modList != null) {
-      listener.get(modList)
+    modList?.let {
+      listener.get(it)
       return
     }
 
-    exec.submit {
-      synchronized(Lock) {
-        if (modList != null) {
-          Core.app.post {
-            listener.get(modList)
-          }
-          return@synchronized
-        }
-
-        val req = Http.get(He.modJsonURLs[index])
-        req.error { err ->
-          if (index < He.modJsonURLs.size - 1) {
-            getModList(index + 1, false, errHandler, listener)
-          }
-          else {
-            Core.app.post {
-              errHandler?.get(err)
-            }
-          }
-        }
-        req.block { response ->
-          val strResult = response.resultAsString
-          try {
-            val list = JsonIO.json.fromJson(Seq::class.java, ModListing::class.java, strResult) as Seq<ModListing>
-            val d = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'")
-            val parser = Func { text: String ->
-              try {
-                return@Func d.parse(text)
-              } catch (_: Exception) {
-                return@Func Date()
-              }
-            }
-
-            list.sortComparing { m -> parser.get(m!!.lastUpdated) }.reverse()
-
-            val parsed = OrderedMap<Name, ModListing>()
-            list.forEach { parsed[Name(it)] = it }
-
-            modList = parsed
-
-            Core.app.post {
-              listener.get(parsed)
-            }
-          } catch (e: Exception) {
-            Core.app.post {
-              errHandler?.get(e)
-            }
-          }
-        }
+    listScope.launch {
+      try {
+        val list = fetchModList(index)
+        withContext(Dispatchers.Post) { listener.get(list) }
+      } catch (e: CancellationException) {
+        throw e
+      } catch (e: Throwable) {
+        withContext(Dispatchers.Post) { errHandler?.get(e) }
       }
     }
+  }
+
+  private suspend fun fetchModList(index: Int): OrderedMap<Name, ModListing> {
+    val deferred: Deferred<OrderedMap<Name, ModListing>> = synchronized(listLock) {
+      modList?.let { return it }
+
+      listDeferred ?: listScope.async(CoroutineName("helium-mod-list-fetch")) {
+        loadModList(index).also { modList = it }
+      }.also { pending ->
+        listDeferred = pending
+        pending.invokeOnCompletion { synchronized(listLock) { if (listDeferred === pending) listDeferred = null } }
+      }
+    }
+
+    return deferred.await()
+  }
+
+  private suspend fun loadModList(index: Int): OrderedMap<Name, ModListing> {
+    var last: Throwable? = null
+
+    for (i in index until He.modJsonURLs.size) {
+      try {
+        return parseModList(Downloader.getString(He.modJsonURLs[i], maxRetry = 0))
+      } catch (e: CancellationException) {
+        throw e
+      } catch (e: Throwable) {
+        last = e
+      }
+    }
+
+    throw last ?: IllegalStateException("no available mod list url")
+  }
+
+  @Suppress("UNCHECKED_CAST")
+  private fun parseModList(json: String): OrderedMap<Name, ModListing> {
+    val list = JsonIO.json.fromJson(Seq::class.java, ModListing::class.java, json) as Seq<ModListing>
+    val d = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'")
+    val parser = Func { text: String ->
+      try {
+        return@Func d.parse(text)
+      } catch (_: Exception) {
+        return@Func Date()
+      }
+    }
+
+    list.sortComparing { m -> parser.get(m!!.lastUpdated) }.reverse()
+
+    val parsed = OrderedMap<Name, ModListing>()
+    list.forEach { parsed[Name(it)] = it }
+
+    return parsed
   }
 
   fun setupContentsList(
@@ -354,7 +376,8 @@ object ModsDialogHelper {
    * 单个 mod 的下载弹窗：内容就是一条 [ModDownloadBar]，由弹窗底部的"下载"按钮触发。
    */
   fun showDownloadModDialog(modInfo: ModListing, callback: Runnable) {
-    val bar = ModDownloadBar(modInfo, exec)
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + CoroutineName("helium-mod-download"))
+    val bar = ModDownloadBar(modInfo, scope)
     val title = Core.bundle[if (bar.isUpdate) "dialog.mods.updateMod" else "dialog.mods.downloadMod"]
 
     val dialog = UIUtils.showPane(
@@ -375,8 +398,9 @@ object ModsDialogHelper {
       }
     ) { t -> bar.buildContent(t, withButton = false) }
 
+    dialog.hidden { if (!bar.complete) scope.cancel() }
+
     bar.onInstalled = {
-      // 已经回到主线程：关掉下载弹窗，换成完成提示
       dialog.hide()
       UIUtils.showPane(
         title,
@@ -388,14 +412,6 @@ object ModsDialogHelper {
     }
   }
 
-  /**
-   * 批量下载弹窗：整个收藏夹的 mod 以可滚动列表呈现，每行一条 [ModDownloadBar]（自带下载按钮）。
-   *
-   * 不可用的 mod（[ModStat.isValid] 为假）直接过滤掉，不进入列表 —— 这类 mod 只能回到主布局里
-   * 勾选"显示不可用 mod"后单独强制安装。
-   *
-   * 「全部下载」会并发启动所有缺失 / 有更新的条目；已安装且版本一致的会被跳过（仍显示在列表里）。
-   */
   fun showDownloadAllDialog(mods: List<ModListing>, callback: Runnable) {
     val installable = mods.filter { ModStat.run { it.checkStatus().isValid() } }
 
@@ -404,22 +420,24 @@ object ModsDialogHelper {
       return
     }
 
-    val bars = installable.map { mod -> ModDownloadBar(mod, exec).also { it.onInstalled = { callback.run() } } }
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + CoroutineName("helium-mod-download-all"))
+    val bars = installable.map { mod ->
+      ModDownloadBar(mod, scope).also { it.onInstalled = { callback.run() } }
+    }
 
-    UIUtils.showPane(
+    val dialog = UIUtils.showPane(
       Core.bundle["dialog.mods.installAll"],
       ButtonEntry(
         Core.bundle["cancel"],
         Icon.cancel
       ) {
-        bars.forEach { it.cancel() }
+        scope.cancel()
         it.hide()
       },
       ButtonEntry(
         Core.bundle["dialog.mods.downloadAll"],
         Icon.download
       ) {
-        // 并发下载：跳过已安装且版本一致的、正在下载的和已经完成的
         bars.forEach { bar ->
           if (!bar.isCurrent && !bar.downloading && !bar.complete) bar.start()
         }
@@ -430,6 +448,8 @@ object ModsDialogHelper {
         t.row()
       }
     }
+
+    dialog.hidden { scope.cancel() }
   }
 }
 
@@ -522,19 +542,25 @@ class Name(
   override fun toString() = "$author-$name"
 }
 
-/**
- * 单个 mod 的下载栏。
- *
- * 单个下载弹窗把它作为唯一内容；批量下载弹窗把它作为可滚动列表里的一行（每行自带下载按钮）。
- *
- * 网络请求跑在线程池 / 下载协程里，进度由 IO 线程回写（状态字段都是 volatile）；
- * 而 importMod、removeMod、弹窗等涉及游戏状态与场景图的操作一律 post 回主线程。
- */
+internal fun resolveAssetTarget(json: Jval): Pair<String, String> {
+  val assets = json.get("assets").asArray()
+
+  val dexed = assets.find { it.getString("name").startsWith("dexed") && it.getString("name").endsWith(".jar") }
+  val jar = dexed ?: assets.find { it.getString("name").endsWith(".jar") }
+  val archive = jar ?: assets.find { it.getString("name").endsWith(".zip") }
+  val suffix = if (dexed == null && jar == null) ".zip" else ".jar"
+
+  return (archive?.getString("browser_download_url") ?: json.getString("zipball_url")) to suffix
+}
+
 class ModDownloadBar(
   val modInfo: ModListing,
-  private val exec: ExecutorService,
+  private val scope: CoroutineScope,
 ) {
-  /** 安装完成后的回调，主线程执行 */
+  companion object {
+    private val apiGate = Semaphore(3)
+  }
+
   var onInstalled: () -> Unit = {}
 
   @Volatile
@@ -553,83 +579,74 @@ class ModDownloadBar(
   var downloading = false
     private set
 
-  private var task: Future<*>? = null
-  private var download: Job? = null
-
   private val loaded: Mods.LoadedMod? get() = Vars.mods.getMod(modInfo.internalName)
 
-  /** @return 本地已安装且版本与索引一致；批量下载时跳过 */
-  val isCurrent: Boolean get() = loaded?.meta?.version == modInfo.version
+  private var job: Job? = null
 
-  /** @return 本地已安装的是旧版本，本次下载是更新而不是重装 */
+  val isCurrent: Boolean get() = loaded?.meta?.version == modInfo.version
   val isUpdate: Boolean get() = loaded?.let {
     it.meta.version != modInfo.version && tryCompareVersion(it.meta.version, modInfo.version) < 0
   } == true
 
-  /** 开始下载；正在下载或已完成时忽略 */
   fun start() {
-    if (downloading || complete) return
+    if (job?.isActive == true || complete) return
 
     downloading = true
     failed = false
     progress = 0f
 
-    task = exec.submit {
-      Http.get(Vars.ghApi + "/repos/" + modInfo.repo + "/releases/latest")
-        .error { e -> fail(e, "dialog.mods.checkFailed") }
-        .block { result ->
-          try {
-            val json = Jval.read(result.resultAsString)
-            val assets = json.get("assets").asArray()
+    job = scope.launch {
+      val self = coroutineContext[Job]
 
-            val dexedAsset = assets.find { j ->
-              j.getString("name").startsWith("dexed")
-              && j.getString("name").endsWith(".jar")
-            }
-            val jarAssets = dexedAsset ?: assets.find { j ->
-              j.getString("name").endsWith(".jar")
-            }
-            val asset = jarAssets ?: assets.find { j ->
-              j.getString("name").endsWith(".zip")
-            }
-
-            val suffix = if (dexedAsset == null && jarAssets == null) ".zip" else ".jar"
-
-            val url = if (asset != null) {
-              asset.getString("browser_download_url")
-            }
-            else {
-              json.getString("zipball_url")
-            }
-
-            val file = Vars.modDirectory.child("tmp").child(modInfo.internalName + suffix)
-            download = Downloader.launchDownloadToFile(
-              url, file,
-              { p -> progress = p },
-              { e -> fail(e, "dialog.mods.downloadFailed") }
-            ) {
-              // 这里是下载协程（IO 线程）：安装必须回主线程
-              Core.app.post { install(file) }
-            }
-          }
-          catch (e: Exception) {
-            fail(e, "dialog.mods.checkFailed")
-          }
+      try {
+        val target = try {
+          apiGate.withPermit { resolveDownloadTarget() }
         }
+        catch (e: CancellationException) {
+          throw e
+        }
+        catch (e: Throwable) {
+          fail(e, "dialog.mods.checkFailed")
+          return@launch
+        }
+
+        val file = Vars.modDirectory.child("tmp").child(modInfo.internalName + target.second)
+
+        try {
+          Downloader.downloadToFile(target.first, file, progressBack = { p -> progress = p })
+        }
+        catch (e: CancellationException) {
+          file.delete()
+          throw e
+        }
+        catch (e: Throwable) {
+          file.delete()
+          fail(e, "dialog.mods.downloadFailed")
+          return@launch
+        }
+
+        withContext(NonCancellable + Dispatchers.Post) {
+          if (self?.isActive == true) install(file) else file.delete()
+        }
+      }
+      finally {
+        if (!complete) downloading = false
+      }
     }
   }
 
-  /** 取消进行中的下载 */
-  fun cancel() {
-    task?.cancel(true)
-    download?.cancel()
+  private suspend fun resolveDownloadTarget(): Pair<String, String> {
+    val json = Jval.read(Downloader.getString(Vars.ghApi + "/repos/" + modInfo.repo + "/releases/latest"))
 
-    task = null
-    download = null
+    return resolveAssetTarget(json)
+  }
+
+  fun cancel() {
+    job?.cancel()
+    job = null
     downloading = false
   }
 
-  /** 构建下载栏：图标、名称与版本、进度条，以及（可选的）本行自己的下载按钮 */
   fun buildContent(content: Table, withButton: Boolean = true) {
     val repoStr = modInfo.repo.replace("/", "_")
     val iconLink = "https://raw.githubusercontent.com/EB-wilson/HeMindustryMods/master/icons/$repoStr"
@@ -672,13 +689,10 @@ class ModDownloadBar(
     val installed = loaded
     when {
       installed == null -> info.add(modInfo.version)
-
       installed.meta.version == modInfo.version ->
         info.add("[lightgray]${installed.meta.version}  " + Core.bundle["dialog.mods.installed"])
-
       isUpdate ->
         info.add("[lightgray]${installed.meta.version}  >>>  [accent]${modInfo.version}")
-
       else ->
         info.add("[lightgray]${installed.meta.version}  >>>  ${modInfo.version}" + Core.bundle["dialog.mods.reinstall"])
     }
@@ -718,17 +732,14 @@ class ModDownloadBar(
     }
   }
 
-  private fun fail(error: Throwable, messageKey: String) {
+  private suspend fun fail(error: Throwable, messageKey: String) {
     downloading = false
     failed = true
 
-    if (error is InterruptedException) return
-
     Log.err(error)
-    Core.app.post { UIUtils.showException(error, Core.bundle[messageKey]) }
+    withContext(Dispatchers.Post) { UIUtils.showException(error, Core.bundle[messageKey]) }
   }
 
-  /** 安装（主线程执行）：更新时先移除已安装的旧版本 */
   private fun install(file: Fi) {
     try {
       if (isUpdate) loaded?.also { Vars.mods.removeMod(it) }

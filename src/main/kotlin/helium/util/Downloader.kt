@@ -1,6 +1,5 @@
 package helium.util
 
-import arc.Core
 import arc.files.Fi
 import arc.func.Cons
 import arc.graphics.Pixmap
@@ -12,20 +11,13 @@ import arc.struct.OrderedMap
 import arc.util.Http
 import arc.util.Log
 import arc.util.io.Streams.OptimizedByteArrayOutputStream
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineName
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.*
 import java.io.OutputStream
+import java.lang.InterruptedException
+import java.lang.Runnable
+import java.lang.Thread
 import kotlin.math.max
+import kotlin.time.Duration.Companion.milliseconds
 
 object Downloader {
   const val MAX_RETRY: Int = 5
@@ -41,13 +33,6 @@ object Downloader {
 
   private val urlReplacers = OrderedMap<String, String>()
 
-  /**
-   * 镜像表的不可变快照。
-   *
-   * Arc 的 `ObjectMap` 迭代器是**共享对象**：多个下载协程同时在 `for (entry in map)` 上迭代时，
-   * 第二个会抛 `ArcRuntimeException: #iterator() cannot be used nested.`，把该次下载直接打死
-   * （实测日志里每个图标请求都在报这个）。所以读侧只走快照，写侧重建快照。
-   */
   @Volatile
   private var mirrors: List<Pair<String, String>> = emptyList()
 
@@ -84,9 +69,10 @@ object Downloader {
 
   private suspend fun <T> request(url: String, maxRetry: Int, handler: (Http.HttpResponse) -> T): T {
     val realUrl = mirrored(url)
-    var last: Throwable? = null
 
     for (attempt in 0..maxRetry) {
+      currentCoroutineContext().ensureActive()
+
       try {
         return getRequest(realUrl, handler)
       } catch (e: CancellationException) {
@@ -94,13 +80,17 @@ object Downloader {
       } catch (e: InterruptedException) {
         throw e
       } catch (e: Throwable) {
-        last = e
-        if (attempt < maxRetry) delay(RETRY_DELAY_MS * (attempt + 1))
+        if (attempt >= maxRetry || e.isPermanentHttpError()) throw e
+
+        delay((RETRY_DELAY_MS*(attempt + 1)).milliseconds)
       }
     }
 
-    throw last ?: IllegalStateException("download failed: $realUrl")
+    throw IllegalStateException("download failed: $realUrl")
   }
+
+  private fun Throwable.isPermanentHttpError(): Boolean =
+    this is Http.HttpStatusException && status.code in 400..499 && status.code != 408 && status.code != 429
 
   private suspend fun <T> getRequest(url: String, handler: (Http.HttpResponse) -> T): T = withContext(Dispatchers.IO) {
     var result: T? = null
@@ -132,12 +122,6 @@ object Downloader {
     }
   }
 
-  private suspend fun <T> onAppThread(action: () -> T) = suspendCancellableCoroutine { cont ->
-    Core.app.post {
-      cont.resumeWith(runCatching(action))
-    }
-  }
-
   private fun launchDownload(
     errHandler: Cons<Throwable>?,
     block: suspend CoroutineScope.() -> Unit
@@ -166,6 +150,11 @@ object Downloader {
       }
     }
   }
+
+  suspend fun getString(
+    url: String,
+    maxRetry: Int = MAX_RETRY,
+  ): String = request(url, maxRetry) { it.resultAsString }
 
   suspend fun downloadToFile(
     url: String,
@@ -207,7 +196,7 @@ object Downloader {
 
     val pix = Pixmap(bytes)
 
-    onAppThread {
+    withContext(Dispatchers.Post) {
       try {
         val tex = Texture(pix)
         tex.setFilter(Texture.TextureFilter.linear)
