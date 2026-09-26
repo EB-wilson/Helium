@@ -6,6 +6,7 @@ import arc.graphics.Color
 import arc.math.Interp
 import arc.math.geom.Rect
 import arc.scene.Group
+import arc.scene.event.Touchable
 import arc.scene.style.Drawable
 import arc.scene.ui.Dialog
 import arc.scene.ui.Image
@@ -18,7 +19,6 @@ import arc.scene.ui.layout.Scl
 import arc.scene.ui.layout.Table
 import arc.struct.ObjectMap
 import arc.struct.ObjectSet
-import arc.struct.OrderedMap
 import arc.util.Align
 import arc.util.Log
 import arc.util.Scaling
@@ -38,6 +38,7 @@ import helium.ui.dialogs.mods.ModsDialogHelper.buildModAttrList
 import helium.ui.dialogs.mods.ModsDialogHelper.buildStars
 import helium.ui.dialogs.mods.ModsDialogHelper.buildStatus
 import helium.ui.dialogs.mods.ModsDialogHelper.getModList
+import helium.ui.dialogs.mods.ModsDialogHelper.showDownloadAllDialog
 import helium.ui.dialogs.mods.ModsDialogHelper.showDownloadModDialog
 import helium.ui.elements.HeCollapser
 import helium.util.ImageCache
@@ -291,10 +292,14 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
               }
             }
           }
+
+          // 收藏夹行的收纳浮窗只向下展开，默认的绘制顺序（先加先画）会让它被下方的模组卡片盖住。
+          // 反转列表子元素的遍历顺序，使浮窗所在的收藏夹行比其下方的元素更晚绘制，从而显示在最上层。
+          list.children.reverse()
         }
 
         rebuildList()
-      }, Styles.smallPane)).growY().fillX()
+      }, Styles.smallPane)).growY().fillX().scrollX(false)
       main.row()
       main.line(Color.gray, true, 4f).padTop(6f).padBottom(6f)
       main.row()
@@ -403,6 +408,7 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
     }
   }
 
+  var shownMenu: Table? = null
   private fun addFavoritesRow(list: Table, folder: AbstractFavorites, n: Int): Array<Table> {
     var coll: HeCollapser? = null
     var arrowCell: Cell<Image>? = null
@@ -413,25 +419,78 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
     list.button({ t ->
       arrowCell = t.image(if (expanded) Icon.downOpen else Icon.rightOpen).size(28f).pad(4f)
 
-      t.add(folder.name).color(Pal.accent).pad(4f).labelAlign(Align.left)
-      t.add().growX()
+      t.add(folder.name).color(Pal.accent).pad(4f).growX()
+        .labelAlign(Align.left).wrap(true).ellipsis(true)
 
       t.table { actions ->
         actions.defaults().size(44f).pad(2f)
 
-        if (folder.renamable) {
-          actions.button(Icon.edit, Styles.clearNonei, 32f) { renameFavorites(folder) }
-            .addTip(Core.bundle["dialog.mods.renameFav"])
+        if (Core.graphics.isPortrait){
+          val buttons = Table(HeAssets.grayUI)
+
+          buttons.margin(4f)
+          buttons.left().defaults().grow().minWidth(220f).left()
+          if (folder.renamable) {
+            buttons.button(Core.bundle["dialog.mods.renameFav"], Icon.edit, Styles.cleart, 32f) {
+              renameFavorites(folder)
+            }.margin(8f).get().labelCell.padLeft(6f).labelAlign(Align.left)
+            buttons.row()
+          }
+          if (folder.deletable) {
+            buttons.button(Core.bundle["dialog.mods.deleteFav"], Icon.trash, Styles.cleart, 32f) {
+              confirmDeleteFavorites(folder)
+            }.margin(8f).get().labelCell.padLeft(6f).labelAlign(Align.left)
+            buttons.row()
+          }
+
+          buttons.button(Core.bundle["dialog.mods.installAll"], Icon.download, Styles.cleart, 32f) {
+            installAllFavorites(folder)
+          }.margin(8f).get().labelCell.padLeft(6f).labelAlign(Align.left)
+          buttons.row()
+
+          buttons.button(Core.bundle["dialog.mods.exportFav"], Icon.export, Styles.cleart, 32f) {
+            exportFavorites(folder)
+          }.margin(8f).get().labelCell.padLeft(6f).labelAlign(Align.left)
+          buttons.row()
+
+          val menu = actions.button(Icon.menu, Styles.clearNonei, 32f) {  }.get()
+          menu.clicked {
+            if (shownMenu != buttons) {
+              shownMenu = buttons
+              buttons.pack()
+              menu.addChild(buttons)
+            }
+            else shownMenu = null
+          }
+
+          buttons.update {
+            if (shownMenu != buttons) buttons.remove()
+            else {
+              val p = buttons.parent?: return@update
+              val y = p.height
+              buttons.setPosition(0f, y, Align.topRight)
+            }
+          }
+        }
+        else {
+          if (folder.renamable) {
+            actions.button(Icon.edit, Styles.clearNonei, 32f) { renameFavorites(folder) }
+              .addTip(Core.bundle["dialog.mods.renameFav"])
+          }
+
+          if (folder.deletable) {
+            actions.button(Icon.trash, Styles.clearNonei, 32f) { confirmDeleteFavorites(folder) }
+              .addTip(Core.bundle["dialog.mods.deleteFav"])
+          }
+
+          actions.button(Icon.download, Styles.clearNonei, 32f) { installAllFavorites(folder) }
+            .addTip(Core.bundle["dialog.mods.installAll"])
+
+          actions.button(Icon.export, Styles.clearNonei, 32f) { exportFavorites(folder) }
+            .addTip(Core.bundle["dialog.mods.exportFav"])
         }
 
-        if (folder.deletable) {
-          actions.button(Icon.trash, Styles.clearNonei, 32f) { confirmDeleteFavorites(folder) }
-            .addTip(Core.bundle["dialog.mods.deleteFav"])
-        }
-
-        actions.button(Icon.export, Styles.clearNonei, 32f) { exportFavorites(folder) }
-          .addTip(Core.bundle["dialog.mods.exportFav"])
-
+        actions.touchable = Touchable.enabled
         actions.addEventBlocker()
       }.pad(4f).right()
     }, Styles.grayt) {
@@ -599,6 +658,33 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
           Label.LabelStyle(MarkdownStyles.defaultMD.codeFont.fontModifier, Color.white)
         ).pad(6f).wrap(true)
       }.margin(12f).minWidth(420f).growX()
+    }
+  }
+
+  /**
+   * 批量下载并安装整个收藏夹的内容。
+   *
+   * 只有能在 mod 索引里解析出来的条目才会进入列表（和收藏夹分栏里显示的内容一致），
+   * 其中不可用的 mod 由 [showDownloadAllDialog] 再过滤掉。
+   */
+  private fun installAllFavorites(folder: AbstractFavorites) {
+    if (folder.isEmpty) {
+      UIUtils.showTip(null, Core.bundle["dialog.mods.noFavorites"])
+      return
+    }
+
+    getModList(
+      errHandler = { e ->
+        Log.err(e)
+        UIUtils.showException(e, Core.bundle["dialog.mods.checkFailed"])
+      }
+    ) { ls ->
+      showDownloadAllDialog(ls.values().filter { folder.contains(it) }) {
+        browserTabs.clear()
+        favoriteTabs.clear()
+        He.heModsDialog.rebuildMods()
+        rebuildList()
+      }
     }
   }
 

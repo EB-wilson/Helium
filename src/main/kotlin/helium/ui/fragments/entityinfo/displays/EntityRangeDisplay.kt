@@ -20,10 +20,12 @@ import helium.ui.elements.HeCollapser
 import helium.ui.fragments.entityinfo.*
 import helium.util.enterSt
 import helium.util.exitSt
+import mindustry.Vars.tilesize
 import mindustry.game.Team
 import mindustry.gen.Building
 import mindustry.gen.Icon
 import mindustry.gen.Posc
+import mindustry.gen.Teamc
 import mindustry.gen.Unitc
 import mindustry.graphics.Layer
 import mindustry.graphics.Pal
@@ -33,26 +35,28 @@ import mindustry.world.blocks.defense.ForceProjector.ForceBuild
 import mindustry.world.blocks.defense.MendProjector.MendBuild
 import mindustry.world.blocks.defense.OverdriveProjector
 import mindustry.world.blocks.defense.OverdriveProjector.OverdriveBuild
+import mindustry.world.blocks.defense.RegenProjector
 import mindustry.world.blocks.defense.turrets.BaseTurret.BaseTurretBuild
 import mindustry.world.blocks.units.RepairTower
 import mindustry.world.blocks.units.RepairTurret
 import mindustry.world.meta.BlockStatus
 
-class EntityRangeDisplayProvider: DisplayProvider<Ranged, EntityRangeDisplay>(), ConfigurableDisplay{
+class EntityRangeDisplayProvider: DisplayProvider<Teamc, EntityRangeDisplay>(), ConfigurableDisplay{
   override val typeID: Int get() = 893475812
 
   override fun targetGroup() = listOf(
     TargetGroup.build,
     TargetGroup.unit
   )
-  override fun valid(entity: Posc): Boolean = entity is Ranged && entity !is ForceBuild
+  override fun valid(entity: Posc): Boolean =
+    (entity is Ranged || entity is RegenProjector.RegenProjectorBuild) && entity !is ForceBuild
   override fun enabled() = He.config.let {
     it.enableRangeDisplay && (it.showAttackRange || it.showHealRange || it.showOverdriveRange)
   }
 
   override fun create() = EntityRangeDisplay()
 
-  override fun initialize(display: EntityRangeDisplay, entity: Ranged, id: Int) {
+  override fun initialize(display: EntityRangeDisplay, entity: Teamc, id: Int) {
     super.initialize(display, entity, id)
     display.timeOffset = Mathf.random(240f)
     display.phaseOffset = Mathf.random(360f)
@@ -67,9 +71,9 @@ class EntityRangeDisplayProvider: DisplayProvider<Ranged, EntityRangeDisplay>(),
       is RepairTower.RepairTowerBuild -> display.isRepair = true
       is MendBuild -> display.isRepair = true
       is OverdriveBuild -> display.isOverdrive = true
+      is RegenProjector.RegenProjectorBuild -> display.isRegen = true
     }
 
-    //team() 要等实体构造完成才可靠，所以延后一帧；池化后必须校验这期间实例没被回收、也没被复用给别的实体
     Core.app.post {
       if (display.pooled || display.entity !== entity) return@post
 
@@ -79,7 +83,7 @@ class EntityRangeDisplayProvider: DisplayProvider<Ranged, EntityRangeDisplay>(),
           display.alpha = 0.1f
           entity.team().id
         }
-        display.isRepair -> {
+        display.isRepair || display.isRegen -> {
           display.color.set(Pal.heal)
           display.alpha = 0.075f
           260
@@ -126,17 +130,19 @@ class EntityRangeDisplayProvider: DisplayProvider<Ranged, EntityRangeDisplay>(),
   )
 }
 
-class EntityRangeDisplay: WorldDrawOnlyDisplay<Ranged>() {
+class EntityRangeDisplay: WorldDrawOnlyDisplay<Teamc>() {
   override val typeID: Int get() = 893475812
   var building: Building? = null
   var vis = 0f
   var range = 0f
   var edges = -1
+  var polyRot = 0f
 
   var isUnit = false
   var isTurret = false
   var isRepair = false
   var isOverdrive = false
+  var isRegen = false
 
   var timeOffset = 0f
   var phaseOffset = 0f
@@ -155,10 +161,12 @@ class EntityRangeDisplay: WorldDrawOnlyDisplay<Ranged>() {
     vis = 0f
     range = 0f
     edges = -1
+    polyRot = 0f
     isUnit = false
     isTurret = false
     isRepair = false
     isOverdrive = false
+    isRegen = false
     timeOffset = 0f
     phaseOffset = 0f
     phaseScl = 0f
@@ -191,7 +199,7 @@ class EntityRangeDisplay: WorldDrawOnlyDisplay<Ranged>() {
 
   override fun shouldDisplay() = vis > 0 && He.config.let {
     ((isUnit || isTurret) && it.showAttackRange)
-    || (isRepair && it.showHealRange)
+    || ((isRepair || isRegen) && it.showHealRange)
     || (isOverdrive && it.showOverdriveRange)
   }
 
@@ -221,7 +229,15 @@ class EntityRangeDisplay: WorldDrawOnlyDisplay<Ranged>() {
 
       Draw.z(layer + 0.001f)
       Draw.color(color)
-      DrawUtils.fillCircle(entity.x, entity.y, radius - 1f)
+      if (edges == -1) {
+        DrawUtils.fillCircle(entity.x, entity.y, radius - 1f)
+      }
+      else {
+        Fill.poly(
+          entity.x, entity.y,
+          edges, radius - 1f, polyRot
+        )
+      }
 
       if (He.config.rangeRenderLevel == 0) {
         Draw.z(layer + 0.002f)
@@ -240,7 +256,7 @@ class EntityRangeDisplay: WorldDrawOnlyDisplay<Ranged>() {
           Draw.color()
           DrawUtils.innerPoly(
             entity.x, entity.y,
-            edges, inner*radius, 0f,
+            edges, inner*radius, polyRot,
             Tmp.c1.set(Color.white).a(0f), Color.white
           )
         }
@@ -254,7 +270,7 @@ class EntityRangeDisplay: WorldDrawOnlyDisplay<Ranged>() {
       else {
         Lines.poly(
           entity.x, entity.y,
-          edges, radius, 0f
+          edges, radius, polyRot
         )
       }
     }?:run {
@@ -278,7 +294,7 @@ class EntityRangeDisplay: WorldDrawOnlyDisplay<Ranged>() {
         DrawUtils.dashPoly(
           entity.x, entity.y,
           edges, radius,
-          0.5f,
+          polyRot,
           Time.time*2.2f + timeOffset,
           8 + (radius/12).toInt()
         )
@@ -292,6 +308,7 @@ class EntityRangeDisplay: WorldDrawOnlyDisplay<Ranged>() {
     if (n++ >= 30) {
       range = entity.getRange()
       edges = entity.getEdges()
+      polyRot = entity.getPolyRot()
       to = building?.let {
         if (it.status() !== BlockStatus.noInput) 1f else 0f
       }?:1f
@@ -301,14 +318,21 @@ class EntityRangeDisplay: WorldDrawOnlyDisplay<Ranged>() {
     if (!Mathf.equal(vis, to)) vis = Mathf.approach(vis, to, delta*0.04f)
   }
 
-  private fun Ranged.getRange(): Float = when(this) {
+  private fun Teamc.getRange(): Float = when(this) {
     // why?
     is OverdriveBuild -> range()*phaseHeat*(block as OverdriveProjector).phaseRangeBoost
-    else -> range()
+    is RegenProjector.RegenProjectorBuild -> (block as RegenProjector).range*tilesize.toFloat()/Mathf.sqrt2
+    is Ranged -> range()
+    else -> throw IllegalArgumentException("Unknown type.")
   }
 
-  private fun Ranged.getEdges(): Int = when(this) {
-    is RepairTower.RepairTowerBuild -> 4
+  private fun Teamc.getEdges(): Int = when(this) {
+    is RegenProjector.RegenProjectorBuild -> 4
     else -> -1
+  }
+
+  private fun Teamc.getPolyRot(): Float = when(this) {
+    is RegenProjector.RegenProjectorBuild -> 45f
+    else -> 0f
   }
 }

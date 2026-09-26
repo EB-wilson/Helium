@@ -15,15 +15,17 @@ import helium.util.enterSt
 import helium.util.exitSt
 import mindustry.gen.Icon
 import mindustry.gen.Posc
+import mindustry.gen.Teamc
 import mindustry.gen.Unitc
 import mindustry.graphics.Layer
 import mindustry.logic.Ranged
 import mindustry.ui.Styles
+import mindustry.world.blocks.defense.RegenProjector
 import mindustry.world.blocks.defense.turrets.BaseTurret.BaseTurretBuild
 import mindustry.world.blocks.defense.turrets.Turret
 import mindustry.world.blocks.defense.turrets.Turret.TurretBuild
 
-class AttackAngleDisplayProvider: DisplayProvider<Ranged, AttackAngleDisplay>(){
+class AttackAngleDisplayProvider: DisplayProvider<Teamc, AttackAngleDisplay>(){
   override val typeID: Int get() = 826592238
   override val hoveringOnly: Boolean get() = true
 
@@ -49,13 +51,13 @@ class AttackAngleDisplayProvider: DisplayProvider<Ranged, AttackAngleDisplay>(){
   }
 }
 
-class AttackAngleDisplay: WorldDrawOnlyDisplay<Ranged>() {
+class AttackAngleDisplay: WorldDrawOnlyDisplay<Teamc>() {
   override val typeID: Int get() = 826592238
 
   var isUnit = false
   var isTurret = false
 
-  override fun initialize(entity: Ranged, id: Int, owner: DisplayProvider<*, *>?) {
+  override fun initialize(entity: Teamc, id: Int, owner: DisplayProvider<*, *>?) {
     super.initialize(entity, id, owner)
     isUnit = entity is Unitc
     isTurret = entity is BaseTurretBuild
@@ -74,7 +76,7 @@ class AttackAngleDisplay: WorldDrawOnlyDisplay<Ranged>() {
     Draw.z(Layer.light + 5)
     Draw.color(current.team().color, (0.1f + Mathf.absin(8f, 0.15f))*alpha)
     if (isTurret && current is TurretBuild) drawTurretAttackCone(current)
-    else if (isUnit) drawUnitAttackCone(current as Unitc)
+    else if (isUnit && current is Unitc) drawUnitAttackCone(current)
   }
 
   private fun drawUnitAttackCone(unit: Unitc) {

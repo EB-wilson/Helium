@@ -57,7 +57,7 @@ abstract class AbstractFavorites(val name: String) {
     }
     json.put("mods", list)
 
-    return json.toString()
+    return json.toString(Jval.Jformat.formatted)
   }
 
   protected fun replaceMods(values: Collection<Name>) {

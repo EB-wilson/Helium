@@ -15,9 +15,10 @@ import kotlin.math.max
 
 
 object GithubAPI {
+  // Magic Numbers
   private const val SESSION_RECORD_VERSION: Byte = 1
   private const val SESSION_RECORD_HEADER = 30
-  private const val SESSION_IDLE_TIMEOUT_MS = 24L * 60 * 60 * 1000
+  private const val SESSION_IDLE_TIMEOUT_MS = 3L * 24L * 60 * 60 * 1000
   private const val SESSION_MAX_AGE_MS = 30L * 24 * 60 * 60 * 1000
   private const val TOKEN_REFRESH_SKEW_MS = 5L * 60 * 1000
   private const val LAST_USED_WRITE_INTERVAL_MS = 60L * 1000

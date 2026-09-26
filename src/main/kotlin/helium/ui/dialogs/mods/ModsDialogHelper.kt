@@ -1,6 +1,7 @@
 package helium.ui.dialogs.mods
 
 import arc.Core
+import arc.files.Fi
 import arc.func.Cons
 import arc.func.Func
 import arc.graphics.Color
@@ -349,169 +350,86 @@ object ModsDialogHelper {
     }
   }
 
+  /**
+   * 单个 mod 的下载弹窗：内容就是一条 [ModDownloadBar]，由弹窗底部的"下载"按钮触发。
+   */
   fun showDownloadModDialog(modInfo: ModListing, callback: Runnable) {
-    var progress = 0f
-    var complete = false
-    var downloading = false
-    var task: Future<*>? = null
-    var download: Job? = null
+    val bar = ModDownloadBar(modInfo, exec)
+    val title = Core.bundle[if (bar.isUpdate) "dialog.mods.updateMod" else "dialog.mods.downloadMod"]
 
-    val loaded = Vars.mods.getMod(modInfo.internalName)
-    val isUpdate =
-      loaded != null
-      && loaded.meta.version != modInfo.version
-      && tryCompareVersion(loaded.meta.version, modInfo.version) < 0
-
-    fun buildContent(content: Table) {
-      val repoStr = modInfo.repo.replace("/", "_")
-      val iconLink = "https://raw.githubusercontent.com/EB-wilson/HeMindustryMods/master/icons/$repoStr"
-      val image = Downloader.launchDownloadImg(iconLink, Core.atlas.find("nomap"))
-
-      content.table(HeAssets.darkGrayUIAlpha) { cont ->
-        cont.table(Tex.buttonSelect) { icon ->
-          icon.image(image).scaling(Scaling.fit).size(80f)
-        }.pad(10f).margin(4f).size(88f)
-        cont.stack(
-          Table { info ->
-            info.left().top().defaults().left().pad(3f)
-            info.add(modInfo.name).color(Pal.accent)
-            info.row()
-
-            if (loaded != null) {
-              if (isUpdate) {
-                info.add("[lightgray]${loaded.meta.version}  >>>  [accent]${modInfo.version}")
-              }
-              else {
-                info.add("[lightgray]${loaded.meta.version}  >>>  ${modInfo.version}" + Core.bundle["dialog.mods.reinstall"])
-              }
-            }
-            else info.add(modInfo.version)
-
-            info.row()
-            info.table { b ->
-              b.add(
-                Bar(
-                  {
-                    if (complete) Core.bundle["dialog.mods.downloadComplete"]
-                    else Core.bundle.format(
-                      "dialog.mods.downloading",
-                      if (progress < 0) (-progress).toStoreSize()
-                      else "${Mathf.round(progress*100)}%"
-                    )
-                  },
-                  { Pal.accent },
-                  { if (progress < 0) 1f else progress }
-                )).growX().pad(6f).height(22f).visible { downloading }
-            }.grow()
-          },
-          Table { info ->
-            info.top().right().defaults().right().top()
-            info.table { status ->
-              status.top().right().defaults().size(26f).pad(4f)
-              val stat = modInfo.checkStatus()
-
-              buildModAttrIcons(status, stat)
-            }.fill()
-            info.row()
-            info.table { stars ->
-              stars.bottom().right()
-              buildStars(stars, modInfo)
-            }
-          }
-        ).pad(12f).padLeft(4f).growX().fillY().minWidth(420f)
-      }.margin(6f).growX().fillY()
-    }
-
-    UIUtils.showPane(
-      Core.bundle[if (isUpdate) "dialog.mods.updateMod" else "dialog.mods.downloadMod"],
+    val dialog = UIUtils.showPane(
+      title,
       ButtonEntry(
         Core.bundle["cancel"],
         Icon.cancel
       ) {
-        task?.cancel(true)
-        download?.cancel()
+        bar.cancel()
         it.hide()
       },
       ButtonEntry(
         Core.bundle["misc.download"],
         Icon.download,
-        disabled = { downloading }
+        disabled = { bar.downloading || bar.complete }
       ) {
-        downloading = true
+        bar.start()
+      }
+    ) { t -> bar.buildContent(t, withButton = false) }
 
-        task = exec.submit {
-          Http.get(Vars.ghApi + "/repos/" + modInfo.repo + "/releases/latest")
-            .error { e ->
-              downloading = false
-              if (e is InterruptedException) return@error
-              Log.err(e)
-              Core.app.post {
-                UIUtils.showException(e, Core.bundle["dialog.mods.checkFailed"])
-              }
-            }
-            .block { result ->
-              val json = Jval.read(result.resultAsString)
-              val assets = json.get("assets").asArray()
+    bar.onInstalled = {
+      // 已经回到主线程：关掉下载弹窗，换成完成提示
+      dialog.hide()
+      UIUtils.showPane(
+        title,
+        ButtonEntry(Core.bundle["confirm"], Icon.ok) { d ->
+          callback.run()
+          d.hide()
+        }
+      ) { t -> bar.buildContent(t, withButton = false) }
+    }
+  }
 
-              val dexedAsset = assets.find { j ->
-                j.getString("name").startsWith("dexed")
-                && j.getString("name").endsWith(".jar")
-              }
-              val jarAssets = dexedAsset ?: assets.find { j ->
-                j.getString("name").endsWith(".jar")
-              }
-              val asset = jarAssets ?: assets.find { j ->
-                j.getString("name").endsWith(".zip")
-              }
+  /**
+   * 批量下载弹窗：整个收藏夹的 mod 以可滚动列表呈现，每行一条 [ModDownloadBar]（自带下载按钮）。
+   *
+   * 不可用的 mod（[ModStat.isValid] 为假）直接过滤掉，不进入列表 —— 这类 mod 只能回到主布局里
+   * 勾选"显示不可用 mod"后单独强制安装。
+   *
+   * 「全部下载」会并发启动所有缺失 / 有更新的条目；已安装且版本一致的会被跳过（仍显示在列表里）。
+   */
+  fun showDownloadAllDialog(mods: List<ModListing>, callback: Runnable) {
+    val installable = mods.filter { ModStat.run { it.checkStatus().isValid() } }
 
-              val suffix = if (dexedAsset == null && jarAssets == null) ".zip" else ".jar"
+    if (installable.isEmpty()) {
+      UIUtils.showTip(null, Core.bundle["dialog.mods.installAllEmpty"])
+      return
+    }
 
-              val url = if (asset != null) {
-                asset.getString("browser_download_url")
-              }
-              else {
-                json.getString("zipball_url")
-              }
+    val bars = installable.map { mod -> ModDownloadBar(mod, exec).also { it.onInstalled = { callback.run() } } }
 
-              val fi = Vars.modDirectory.child("tmp").child(modInfo.internalName + suffix)
-              download = Downloader.launchDownloadToFile(
-                url, fi,
-                { p -> progress = p },
-                { e ->
-                  Log.err(e)
-                  Core.app.post {
-                    UIUtils.showException(e, Core.bundle["dialog.mods.downloadFailed"])
-                  }
-                }
-              ) {
-                Core.app.post {
-                  try {
-                    if (isUpdate) {
-                      loaded.also { m -> Vars.mods.removeMod(m) }
-                    }
-                    Vars.mods.importMod(fi)
-                    fi.delete()
-                    complete = true
-                    callback.run()
-
-                    it.hide()
-                    UIUtils.showPane(
-                      Core.bundle[if (isUpdate) "dialog.mods.updateMod" else "dialog.mods.downloadMod"],
-                      ButtonEntry(Core.bundle["confirm"], Icon.ok) { d ->
-                        callback.run()
-                        d.hide()
-                      }
-                    ) { t -> buildContent(t) }
-                  } catch (e: Exception) {
-                    Log.err(e)
-                    UIUtils.showException(e, Core.bundle["dialog.mods.downloadFailed"])
-                  }
-                }
-              }
-            }
+    UIUtils.showPane(
+      Core.bundle["dialog.mods.installAll"],
+      ButtonEntry(
+        Core.bundle["cancel"],
+        Icon.cancel
+      ) {
+        bars.forEach { it.cancel() }
+        it.hide()
+      },
+      ButtonEntry(
+        Core.bundle["dialog.mods.downloadAll"],
+        Icon.download
+      ) {
+        // 并发下载：跳过已安装且版本一致的、正在下载的和已经完成的
+        bars.forEach { bar ->
+          if (!bar.isCurrent && !bar.downloading && !bar.complete) bar.start()
         }
       }
-    ) { t -> buildContent(t) }
+    ) { t ->
+      bars.forEach { bar ->
+        bar.buildContent(t)
+        t.row()
+      }
+    }
   }
 }
 
@@ -602,4 +520,229 @@ class Name(
   }
 
   override fun toString() = "$author-$name"
+}
+
+/**
+ * 单个 mod 的下载栏。
+ *
+ * 单个下载弹窗把它作为唯一内容；批量下载弹窗把它作为可滚动列表里的一行（每行自带下载按钮）。
+ *
+ * 网络请求跑在线程池 / 下载协程里，进度由 IO 线程回写（状态字段都是 volatile）；
+ * 而 importMod、removeMod、弹窗等涉及游戏状态与场景图的操作一律 post 回主线程。
+ */
+class ModDownloadBar(
+  val modInfo: ModListing,
+  private val exec: ExecutorService,
+) {
+  /** 安装完成后的回调，主线程执行 */
+  var onInstalled: () -> Unit = {}
+
+  @Volatile
+  var progress = 0f
+    private set
+
+  @Volatile
+  var complete = false
+    private set
+
+  @Volatile
+  var failed = false
+    private set
+
+  @Volatile
+  var downloading = false
+    private set
+
+  private var task: Future<*>? = null
+  private var download: Job? = null
+
+  private val loaded: Mods.LoadedMod? get() = Vars.mods.getMod(modInfo.internalName)
+
+  /** @return 本地已安装且版本与索引一致；批量下载时跳过 */
+  val isCurrent: Boolean get() = loaded?.meta?.version == modInfo.version
+
+  /** @return 本地已安装的是旧版本，本次下载是更新而不是重装 */
+  val isUpdate: Boolean get() = loaded?.let {
+    it.meta.version != modInfo.version && tryCompareVersion(it.meta.version, modInfo.version) < 0
+  } == true
+
+  /** 开始下载；正在下载或已完成时忽略 */
+  fun start() {
+    if (downloading || complete) return
+
+    downloading = true
+    failed = false
+    progress = 0f
+
+    task = exec.submit {
+      Http.get(Vars.ghApi + "/repos/" + modInfo.repo + "/releases/latest")
+        .error { e -> fail(e, "dialog.mods.checkFailed") }
+        .block { result ->
+          try {
+            val json = Jval.read(result.resultAsString)
+            val assets = json.get("assets").asArray()
+
+            val dexedAsset = assets.find { j ->
+              j.getString("name").startsWith("dexed")
+              && j.getString("name").endsWith(".jar")
+            }
+            val jarAssets = dexedAsset ?: assets.find { j ->
+              j.getString("name").endsWith(".jar")
+            }
+            val asset = jarAssets ?: assets.find { j ->
+              j.getString("name").endsWith(".zip")
+            }
+
+            val suffix = if (dexedAsset == null && jarAssets == null) ".zip" else ".jar"
+
+            val url = if (asset != null) {
+              asset.getString("browser_download_url")
+            }
+            else {
+              json.getString("zipball_url")
+            }
+
+            val file = Vars.modDirectory.child("tmp").child(modInfo.internalName + suffix)
+            download = Downloader.launchDownloadToFile(
+              url, file,
+              { p -> progress = p },
+              { e -> fail(e, "dialog.mods.downloadFailed") }
+            ) {
+              // 这里是下载协程（IO 线程）：安装必须回主线程
+              Core.app.post { install(file) }
+            }
+          }
+          catch (e: Exception) {
+            fail(e, "dialog.mods.checkFailed")
+          }
+        }
+    }
+  }
+
+  /** 取消进行中的下载 */
+  fun cancel() {
+    task?.cancel(true)
+    download?.cancel()
+
+    task = null
+    download = null
+    downloading = false
+  }
+
+  /** 构建下载栏：图标、名称与版本、进度条，以及（可选的）本行自己的下载按钮 */
+  fun buildContent(content: Table, withButton: Boolean = true) {
+    val repoStr = modInfo.repo.replace("/", "_")
+    val iconLink = "https://raw.githubusercontent.com/EB-wilson/HeMindustryMods/master/icons/$repoStr"
+    val icon = Downloader.downloadLazyDrawable(iconLink, Core.atlas.find("nomap"))
+
+    content.table(HeAssets.darkGrayUIAlpha) { cont ->
+      cont.table(Tex.buttonSelect) { t ->
+        t.image(icon).scaling(Scaling.fit).size(80f)
+      }.pad(10f).margin(4f).size(88f)
+
+      cont.stack(
+        Table { info -> buildInfo(info) },
+        Table { info -> buildStatus(info) },
+      ).pad(12f).padLeft(4f).growX().fillY().minWidth(420f)
+
+      if (withButton) {
+        cont.table { buttons ->
+          buttons.defaults().size(48f).pad(4f)
+
+          buttons.button(Icon.downloadSmall, Styles.clearNonei, 48f) { start() }
+            .disabled { downloading || complete }
+            .update { b ->
+              b.image.setScale(0.9f)
+              b.style.imageUpColor = when {
+                complete -> Pal.heal
+                failed -> Color.crimson
+                else -> Color.white
+              }
+            }
+        }.pad(8f)
+      }
+    }.margin(6f).growX().fillY()
+  }
+
+  private fun buildInfo(info: Table) {
+    info.left().top().defaults().left().pad(3f)
+    info.add(modInfo.name).color(Pal.accent)
+    info.row()
+
+    val installed = loaded
+    when {
+      installed == null -> info.add(modInfo.version)
+
+      installed.meta.version == modInfo.version ->
+        info.add("[lightgray]${installed.meta.version}  " + Core.bundle["dialog.mods.installed"])
+
+      isUpdate ->
+        info.add("[lightgray]${installed.meta.version}  >>>  [accent]${modInfo.version}")
+
+      else ->
+        info.add("[lightgray]${installed.meta.version}  >>>  ${modInfo.version}" + Core.bundle["dialog.mods.reinstall"])
+    }
+
+    info.row()
+    info.table { bar ->
+      bar.add(
+        Bar(
+          {
+            when {
+              failed -> Core.bundle["dialog.mods.downloadFailed"]
+              complete -> Core.bundle["dialog.mods.downloadComplete"]
+              else -> Core.bundle.format(
+                "dialog.mods.downloading",
+                if (progress < 0) (-progress).toStoreSize()
+                else "${Mathf.round(progress*100)}%"
+              )
+            }
+          },
+          { if (failed) Color.crimson else Pal.accent },
+          { if (progress < 0) 1f else progress }
+        )
+      ).growX().pad(6f).height(22f).visible { downloading || complete || failed }
+    }.grow()
+  }
+
+  private fun buildStatus(info: Table) {
+    info.top().right().defaults().right().top()
+    info.table { status ->
+      status.top().right().defaults().size(26f).pad(4f)
+      ModsDialogHelper.buildModAttrIcons(status, modInfo.checkStatus())
+    }.fill()
+    info.row()
+    info.table { stars ->
+      stars.bottom().right()
+      ModsDialogHelper.buildStars(stars, modInfo)
+    }
+  }
+
+  private fun fail(error: Throwable, messageKey: String) {
+    downloading = false
+    failed = true
+
+    if (error is InterruptedException) return
+
+    Log.err(error)
+    Core.app.post { UIUtils.showException(error, Core.bundle[messageKey]) }
+  }
+
+  /** 安装（主线程执行）：更新时先移除已安装的旧版本 */
+  private fun install(file: Fi) {
+    try {
+      if (isUpdate) loaded?.also { Vars.mods.removeMod(it) }
+
+      Vars.mods.importMod(file)
+      file.delete()
+
+      complete = true
+      downloading = false
+      onInstalled()
+    }
+    catch (e: Exception) {
+      Log.err(e)
+      UIUtils.showException(e, Core.bundle["dialog.mods.downloadFailed"])
+    }
+  }
 }
