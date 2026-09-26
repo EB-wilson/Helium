@@ -38,15 +38,15 @@ class UnitHealthDisplayProv: BaseHealthDisplayProv(){
   override fun targetGroup() = listOf(TargetGroup.unit)
   override fun valid(entity: Posc) = entity is Unit
 
-  override fun provide(
-    entity: Healthc,
-    id: Int
-  ) = object: BaseHealthDisplay(style, entity, id){
+  override fun create() = object: BaseHealthDisplay(style){
     override val typeID: Int get() = 982347561
-  }.apply {
-    shieldEnt = entity as? Shieldc
-    insectHealth = entity.health()
-    insectShield = shieldEnt?.shield()?: 0f
+  }
+
+  override fun initialize(display: BaseHealthDisplay, entity: Healthc, id: Int) {
+    super.initialize(display, entity, id)
+    display.shieldEnt = entity as? Shieldc
+    display.insectHealth = entity.health()
+    display.insectShield = display.shieldEnt?.shield()?: 0f
   }
 }
 
@@ -56,15 +56,15 @@ class BuildHealthDisplayProv: BaseHealthDisplayProv(){
   override fun targetGroup() = listOf(TargetGroup.build)
   override fun valid(entity: Posc) = entity is Building
 
-  override fun provide(
-    entity: Healthc,
-    id: Int
-  ) = object: BaseHealthDisplay(style, entity, id){
+  override fun create() = object: BaseHealthDisplay(style){
     override val typeID: Int get() = 238907312
-  }.apply {
-    shieldEnt = entity as? Shieldc
-    insectHealth = entity.health()
-    insectShield = shieldEnt?.shield()?: 0f
+  }
+
+  override fun initialize(display: BaseHealthDisplay, entity: Healthc, id: Int) {
+    super.initialize(display, entity, id)
+    display.shieldEnt = entity as? Shieldc
+    display.insectHealth = entity.health()
+    display.insectShield = display.shieldEnt?.shield()?: 0f
   }
 }
 
@@ -85,10 +85,8 @@ abstract class BaseHealthDisplayProv: DisplayProvider<Healthc, BaseHealthDisplay
 }
 
 abstract class BaseHealthDisplay(
-  val style: HealthBarStyle,
-  entity: Healthc,
-  id: Int
-): EntityInfoDisplay<Healthc>(entity, id){
+  val style: HealthBarStyle
+): EntityInfoDisplay<Healthc>(){
   var detailWidth = 0f
   var shieldWidth = 0f
 
@@ -111,6 +109,34 @@ abstract class BaseHealthDisplay(
   var shieldEnt: Shieldc? = null
 
   override val layoutSide: Side = Side.TOP
+
+  override fun initialize(entity: Healthc, id: Int, owner: DisplayProvider<*, *>?) {
+    super.initialize(entity, id, owner)
+    resetTextState()
+  }
+
+  override fun recycle() {
+    super.recycle()
+    resetTextState()
+    shieldEnt = null
+    insectHealth = 0f
+    insectShield = 0f
+  }
+
+  private fun resetTextState() {
+    detailWidth = 0f
+    shieldWidth = 0f
+    hovering = false
+    lastHealth = 0f
+    lastShield = 0f
+    lastAlpha = 1f
+    lastScale = 0f
+    lastN = 0
+    detailBuff.clear()
+    shieldBuff.clear()
+    detailCache.clear()
+    shieldCache.clear()
+  }
 
   override fun realWidth(prefSize: Float) = prefSize
   override fun realHeight(prefSize: Float) = prefHeight

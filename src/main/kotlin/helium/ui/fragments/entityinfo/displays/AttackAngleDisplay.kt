@@ -34,15 +34,7 @@ class AttackAngleDisplayProvider: DisplayProvider<Ranged, AttackAngleDisplay>(){
   override fun valid(entity: Posc): Boolean = entity is Unitc || entity is BaseTurretBuild
   override fun enabled() = He.config.enableAttackAngleDisplay
 
-  override fun provide(
-    entity: Ranged,
-    id: Int
-  ) = AttackAngleDisplay(entity, id).apply {
-    when(entity) {
-      is Unitc -> isUnit = true
-      is BaseTurretBuild -> isTurret = true
-    }
-  }
+  override fun create() = AttackAngleDisplay()
 
   override fun buildConfig(table: Table) {
     table.image(Icon.downOpen).size(80f).scaling(Scaling.fit)
@@ -57,22 +49,32 @@ class AttackAngleDisplayProvider: DisplayProvider<Ranged, AttackAngleDisplay>(){
   }
 }
 
-class AttackAngleDisplay(
-  entity: Ranged,
-  id: Int
-): WorldDrawOnlyDisplay<Ranged>(entity, id) {
+class AttackAngleDisplay: WorldDrawOnlyDisplay<Ranged>() {
   override val typeID: Int get() = 826592238
 
   var isUnit = false
   var isTurret = false
 
+  override fun initialize(entity: Ranged, id: Int, owner: DisplayProvider<*, *>?) {
+    super.initialize(entity, id, owner)
+    isUnit = entity is Unitc
+    isTurret = entity is BaseTurretBuild
+  }
+
+  override fun recycle() {
+    super.recycle()
+    isUnit = false
+    isTurret = false
+  }
+
   override fun update(delta: Float, alpha: Float, isHovering: Boolean, isHolding: Boolean) { /*no action*/ }
 
   override fun draw(alpha: Float) {
+    val current = entity
     Draw.z(Layer.light + 5)
-    Draw.color(entity.team().color, (0.1f + Mathf.absin(8f, 0.15f))*alpha)
-    if (isTurret && entity is TurretBuild) drawTurretAttackCone(entity)
-    else if (isUnit) drawUnitAttackCone(entity as Unitc)
+    Draw.color(current.team().color, (0.1f + Mathf.absin(8f, 0.15f))*alpha)
+    if (isTurret && current is TurretBuild) drawTurretAttackCone(current)
+    else if (isUnit) drawUnitAttackCone(current as Unitc)
   }
 
   private fun drawUnitAttackCone(unit: Unitc) {

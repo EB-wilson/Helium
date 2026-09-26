@@ -16,7 +16,7 @@ class Recover: Mod() {
       Vars.ui.showConfirm(Core.bundle["dialog.recovering.title"], Core.bundle["dialog.recovering.confirm"]){
         val dialog = BaseDialog(Core.bundle["dialog.recovering.title"])
         dialog.cont.add("")
-          .width(500f).wrap().pad(4f)
+          .width(500f).wrap(true).pad(4f)
           .update { l ->
             l.setText(Core.bundle["dialog.recovering.text"] + ".".repeat((Time.globalTime%30/10).toInt() + 1))
           }

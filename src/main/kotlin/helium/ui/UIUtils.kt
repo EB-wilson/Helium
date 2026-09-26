@@ -130,6 +130,8 @@ object UIUtils {
               img.setDrawable(i.get())
             }
           }
+
+          if (entry.row) but.row()
         }
       }.growX().fillY()
     }.margin(6f).fill().pad(6f)
@@ -150,6 +152,8 @@ data class ButtonEntry(
   val checked: Boolp? = null,
   val clicked: Cons<Dialog>,
 ){
+  var row = false
+
   constructor(
     title: String,
     icon: Drawable? = null,
@@ -163,4 +167,6 @@ data class ButtonEntry(
     checked,
     clicked,
   )
+
+  fun row(): ButtonEntry = apply { row = true }
 }

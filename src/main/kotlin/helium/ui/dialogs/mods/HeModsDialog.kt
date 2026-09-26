@@ -6,6 +6,7 @@ import arc.graphics.Color
 import arc.graphics.g2d.TextureRegion
 import arc.math.Interp
 import arc.scene.actions.Actions
+import arc.scene.style.Drawable
 import arc.scene.style.TextureRegionDrawable
 import arc.scene.ui.Image
 import arc.scene.ui.Label
@@ -27,22 +28,19 @@ import helium.ui.UIUtils
 import helium.ui.UIUtils.closeBut
 import helium.ui.UIUtils.line
 import helium.ui.dialogs.mods.ModsDialogHelper.addTip
-import helium.ui.dialogs.mods.ModsDialogHelper.buildDescSelector
 import helium.ui.dialogs.mods.ModsDialogHelper.buildErrorIcons
-import helium.ui.dialogs.mods.ModsDialogHelper.buildLinkButton
 import helium.ui.dialogs.mods.ModsDialogHelper.buildModAttrIcons
 import helium.ui.dialogs.mods.ModsDialogHelper.buildModAttrList
 import helium.ui.dialogs.mods.ModsDialogHelper.buildModBasicStatus
 import helium.ui.dialogs.mods.ModsDialogHelper.buildModErrList
 import helium.ui.dialogs.mods.ModsDialogHelper.buildStatus
 import helium.ui.dialogs.mods.ModsDialogHelper.getModList
-import helium.ui.dialogs.mods.ModsDialogHelper.setupContentsList
 import helium.ui.dialogs.mods.ModsDialogHelper.showDownloadModDialog
-import helium.ui.dialogs.mods.ModsDialogHelper.tryCompareVersion
 import helium.ui.elements.HeCollapser
 import helium.util.LOCAL_FILE
 import helium.util.ModStat
 import helium.util.UP_TO_DATE
+import helium.util.VersionCompareHelper.tryCompareVersion
 import mindustry.Vars
 import mindustry.Vars.modGuideURL
 import mindustry.ctype.UnlockableContent
@@ -53,8 +51,6 @@ import mindustry.mod.Mods
 import mindustry.ui.FileChooser
 import mindustry.ui.Styles
 import universe.ui.dialogs.AttachableDialog
-import universe.ui.markdown.Markdown
-import universe.ui.markdown.MarkdownStyles
 
 class HeModsDialog: AttachableDialog(
   Vars.ui.mods,
@@ -323,207 +319,152 @@ class HeModsDialog: AttachableDialog(
   private fun buildModTab(mod: Mods.LoadedMod): Table {
     modTabs[mod]?.also { return it }
 
-    val res = Table()
-    var stat = ModStat.checkModStat(mod)
-    var updateEntry: UpdateEntry? = null
-    var coll: HeCollapser? = null
-    var setupContent = { _: Int -> }
+    val tab = LoadedModTab(mod).build()
+    modTabs[mod] = tab
 
-    modTabs[mod] = res
+    return tab
+  }
 
-    res.button({ top ->
-      top.table(Tex.buttonSelect) { icon ->
-        icon.image(mod.iconTexture?.let { TextureRegionDrawable(TextureRegion(it)) }?:Tex.nomap)
-          .scaling(Scaling.fit).size(80f)
-      }.pad(10f).margin(4f).size(88f)
-      top.stack(
-        Table{ info ->
-          info.left().top().margin(12f).marginLeft(6f).defaults().left()
-          info.add(mod.meta.displayName).color(Pal.accent).grow().padRight(160f).wrap(true)
-          info.row()
-          info.add(mod.meta.version, 0.8f).color(Color.lightGray).grow().padRight(50f).wrap(true)
-          info.row()
-          info.add(mod.meta.shortDescription()).grow().padRight(50f).wrap(true)
-        },
-        Table{ over ->
-          over.right()
+  private inner class LoadedModTab(private val mod: Mods.LoadedMod) : ModTab(
+    mod.meta.displayName,
+    mod.meta.version,
+    mod.meta.shortDescription(),
+    mod.meta.author,
+  ) {
+    private var stat = ModStat.checkModStat(mod)
+    private var updateEntry: UpdateEntry? = null
 
-          over.table { status ->
-            status.top().defaults().size(26f).pad(4f)
+    override fun buildCopy(): ModTab = LoadedModTab(mod)
 
-            var updateTip: Label? = null
-            val checkUpdate = status.image(HeAssets.loading).color(Pal.accent)
-              .tooltip{ t -> t.table(HeAssets.padGrayUIAlpha) { tip ->
-                updateTip = tip.add(Core.bundle["dialog.mods.checkUpdating"], Styles.outlineLabel).get()
-              }}.get()
+    override fun icon(): Drawable =
+      mod.iconTexture?.let { TextureRegionDrawable(TextureRegion(it)) } ?: Tex.nomap
 
-            buildModAttrIcons(status, stat)
+    override fun linkName() = Name(mod)
 
-            checkModUpdate(mod, {
-              checkUpdate.drawable = HeAssets.networkError
-              checkUpdate.setColor(Color.red)
-              updateTip!!.setText(Core.bundle["dialog.mods.checkUpdateFailed"])
-            }){ res ->
-              ModStat.apply {
-                if (res.latestMod != null && res.updateValid) stat = stat or UP_TO_DATE
-                if (res.latestMod == null) stat = stat or LOCAL_FILE
+    override fun description() = mod.meta.description
 
-                if (stat.isUpToDate()) {
-                  checkUpdate.drawable = Icon.upSmall
-                  checkUpdate.setColor(HeAssets.lightBlue)
+    override fun contents(): List<UnlockableContent> = ModStat.run {
+      if (stat.isEnabled()) Vars.content.contentMap.map { it.toList() }
+        .flatten()
+        .filterIsInstance<UnlockableContent>()
+        .filter { c -> c.minfo.mod === mod && !c.isHidden }
+      else listOf()
+    }
 
-                  updateEntry = res
-                  updateTip!!.setText(Core.bundle.format("dialog.mods.updateValid", res.latestMod!!.version))
-                }
+    override fun buildCornerStatus(status: Table) {
+      var updateTip: Label? = null
+      val checkUpdate = status.image(HeAssets.loading).color(Pal.accent)
+        .tooltip { t -> t.table(HeAssets.padGrayUIAlpha) { tip ->
+          updateTip = tip.add(Core.bundle["dialog.mods.checkUpdating"], Styles.outlineLabel).get()
+        } }.get()
 
-                if (stat.isLocalFile()) {
-                  status.image(Icon.fileSmall).scaling(Scaling.fit)
-                    .color(Color.white)
-                    .addTip(Core.bundle["dialog.mods.localFile"])
-                }
+      buildModAttrIcons(status, stat)
 
-                if (stat.isValid()) {
-                  if (!stat.isUpToDate()) {
-                    if (stat.isEnabled()) {
-                      checkUpdate.drawable = Icon.okSmall
-                      checkUpdate.setColor(Pal.heal)
+      checkModUpdate(mod, {
+        checkUpdate.drawable = HeAssets.networkError
+        checkUpdate.setColor(Color.red)
+        updateTip!!.setText(Core.bundle["dialog.mods.checkUpdateFailed"])
+      }) { res ->
+        ModStat.apply {
+          if (res.latestMod != null && res.updateValid) stat = stat or UP_TO_DATE
+          if (res.latestMod == null) stat = stat or LOCAL_FILE
 
-                      updateTip!!.setText(Core.bundle["dialog.mods.isLatest"])
-                    }
-                    else checkUpdate.visible = false
+          if (stat.isUpToDate()) {
+            checkUpdate.drawable = Icon.upSmall
+            checkUpdate.setColor(HeAssets.lightBlue)
+
+            updateEntry = res
+            updateTip!!.setText(Core.bundle.format("dialog.mods.updateValid", res.latestMod!!.version))
+          }
+
+          if (stat.isLocalFile()) {
+            status.image(Icon.fileSmall).scaling(Scaling.fit)
+              .color(Color.white)
+              .addTip(Core.bundle["dialog.mods.localFile"])
+          }
+
+          if (stat.isValid()) {
+            if (!stat.isUpToDate()) {
+              if (stat.isEnabled()) {
+                checkUpdate.drawable = Icon.okSmall
+                checkUpdate.setColor(Pal.heal)
+
+                updateTip!!.setText(Core.bundle["dialog.mods.isLatest"])
+              }
+              else checkUpdate.visible = false
+            }
+          }
+          else {
+            checkUpdate.visible = false
+
+            buildErrorIcons(status, stat)
+          }
+        }
+      }
+    }
+
+    override fun buildSideButtons(buttons: Table) {
+      ModStat.apply {
+        buttons.button(Icon.rightOpen, Styles.clearNonei, 32f) {
+          Vars.mods.setEnabled(mod, !mod.enabled())
+          rebuildMods()
+        }.update { m -> m.style.imageUp = if (mod.enabled()) Icon.rightOpen else Icon.leftOpen }
+          .disabled { !mod.enabled() && !stat.isValid() }
+      }
+
+      buttons.row()
+      buttons.button(Icon.exportSmall, Styles.clearNonei, 48f) { shareMod(mod) }
+      buttons.row()
+
+      buttons.addEventBlocker()
+    }
+
+    override fun buildStatusRows(status: Table) {
+      ModStat.apply {
+        status.collapser(
+          { t ->
+            t.left().defaults().left()
+            buildStatus(t, Icon.upSmall, Core.bundle["dialog.mods.updateValidS"], HeAssets.lightBlue)
+          }, false
+        ) { stat.isUpToDate() }.fill().colspan(2)
+        status.row()
+
+        status.collapser(
+          { t ->
+            t.left().defaults().left()
+            buildStatus(t, Icon.fileSmall, Core.bundle["dialog.mods.localFile"], Color.white)
+          }, false
+        ) { stat.isLocalFile() }.fill().colspan(2)
+        status.row()
+
+        buildModBasicStatus(status, stat)
+        buildModAttrList(status, stat)
+        buildModErrList(status, stat)
+      }
+    }
+
+    override fun buildRightColumn(): (Table) -> Unit = { conf ->
+      ModStat.apply {
+        conf.top().right().table { l ->
+          l.line(Color.darkGray, false, 3f)
+          l.table { buttons ->
+            buttons.collapser({
+              it.button(Icon.upSmall, Styles.clearNonei, 48f) {
+                val latest = updateEntry?.latestMod
+                if (latest != null) {
+                  showDownloadModDialog(latest) {
+                    rebuildMods()
                   }
                 }
-                else {
-                  checkUpdate.visible = false
-
-                  buildErrorIcons(status, stat)
-                }
-              }
-            }
-          }.fill().pad(4f)
-
-          over.table { side ->
-            side.line(Color.darkGray, false, 3f)
-            side.table { buttons ->
-              buttons.defaults().size(48f)
-
-              ModStat.apply {
-                buttons.button(Icon.rightOpen, Styles.clearNonei, 32f) {
-                  Vars.mods.setEnabled(mod, !mod.enabled())
-                  rebuildMods()
-                }.update { m -> m.style.imageUp = if (mod.enabled()) Icon.rightOpen else Icon.leftOpen }
-                  .disabled { !mod.enabled() && !stat.isValid() }
-              }
-
-              buttons.row()
-              buttons.button(Icon.exportSmall, Styles.clearNonei, 48f) { shareMod(mod) }
-              buttons.row()
-
-              buttons.addEventBlocker()
-            }.fill()
+                else UIUtils.showError(Core.bundle["dialog.mods.noDownloadLink"])
+              }.size(48f).visible { stat.isUpToDate() }
+            }, false) { stat.isUpToDate() }.fill()
+            buttons.row()
+            buttons.button(Icon.trashSmall, Styles.clearNonei, 48f) { deleteMod(mod) }.size(48f)
           }.fill()
-        }
-      ).grow()
-    }, Styles.grayt) {
-      coll!!.toggle()
-      if (!coll!!.collapse){
-        setupContent(0)
+        }.fill()
       }
-    }.growX().fillY()
-
-    res.row()
-    coll = res.add(HeCollapser(collX = false, collY = true, collapsed = true, Styles.grayPanel){ col ->
-      col.stack(
-        Table{ details ->
-          ModStat.apply {
-            details.left().defaults().growX().pad(4f).padLeft(12f).padRight(12f)
-
-            details.add(Core.bundle.format("dialog.mods.author", mod.meta.author))
-              .growX().padRight(50f).wrap(true).color(Pal.accent).labelAlign(Align.left)
-            details.row()
-            details.table { link ->
-              buildLinkButton(link, Name(mod))
-            }
-            details.row()
-            details.table { status ->
-              status.left().defaults().left()
-
-              status.collapser(
-                { t ->
-                  t.left().defaults().left()
-                  buildStatus(t, Icon.upSmall, Core.bundle["dialog.mods.updateValidS"], HeAssets.lightBlue)
-                }, false
-              ) { stat.isUpToDate() }.fill().colspan(2)
-              status.row()
-
-              status.collapser(
-                { t ->
-                  t.left().defaults().left()
-                  buildStatus(t, Icon.fileSmall, Core.bundle["dialog.mods.localFile"], Color.white)
-                }, false
-              ) { stat.isLocalFile() }.fill().colspan(2)
-              status.row()
-
-              buildModBasicStatus(status, stat)
-              buildModAttrList(status, stat)
-              buildModErrList(status, stat)
-            }
-            details.row()
-            details.line(Color.gray, true, 4f).pad(6f).padLeft(-6f).padRight(-6f)
-            details.row()
-
-            val contents = if (stat.isEnabled()) Vars.content.contentMap.map { it.toList() }
-              .flatten()
-              .filterIsInstance<UnlockableContent>()
-              .filter { c -> c.minfo.mod === mod && !c.isHidden }
-            else listOf()
-
-            var current = -1
-            buildDescSelector(details, { current }, { i -> setupContent(i) }, contents)
-            details.row()
-            details.table(HeAssets.grayUI) { desc ->
-              desc.defaults().grow()
-              setupContent = a@{ i ->
-                if (i == current) return@a
-
-                desc.clearChildren()
-                current = i
-
-                when (i) {
-                  0 -> desc.add(Markdown(mod.meta.description ?: "", MarkdownStyles.defaultMD))
-                  1 -> desc.add(mod.meta.description ?: "").wrap(true)
-                  2 -> setupContentsList(desc, contents)//Core.app.post { setupContentsList(desc, contents) }
-                }
-              }
-            }.grow().margin(12f).padTop(0f)
-          }
-        },
-        Table{ conf ->
-          ModStat.apply {
-            conf.top().right().table { l ->
-              l.line(Color.darkGray, false, 3f)
-              l.table { buttons ->
-                buttons.collapser({
-                  it.button(Icon.upSmall, Styles.clearNonei, 48f) {
-                    val latest = updateEntry?.latestMod
-                    if (latest != null) {
-                      showDownloadModDialog(latest){
-                        rebuildMods()
-                      }
-                    }
-                    else UIUtils.showError(Core.bundle["dialog.mods.noDownloadLink"])
-                  }.size(48f).visible { stat.isUpToDate() }
-                }, false) { stat.isUpToDate() }.fill()
-                buttons.row()
-                buttons.button(Icon.trashSmall, Styles.clearNonei, 48f) { deleteMod(mod) }.size(48f)
-              }.fill()
-            }.fill()
-          }
-        }
-      ).grow()
-    }.also { it.setDuration(0.3f, Interp.pow3Out) }).growX().fillY().colspan(2).get()
-
-    return res
+    }
   }
 
   private fun openFolder() {
@@ -694,11 +635,11 @@ class HeModsDialog: AttachableDialog(
         cont.stack(
           Table { info ->
             info.left().top().margin(12f).marginLeft(6f).defaults().left()
-            info.add(mod.meta.displayName).color(Pal.accent).grow().padRight(160f).wrap()
+            info.add(mod.meta.displayName).color(Pal.accent).grow().padRight(160f).wrap(true)
             info.row()
-            info.add(mod.meta.version, 0.8f).color(Color.lightGray).grow().padRight(50f).wrap()
+            info.add(mod.meta.version, 0.8f).color(Color.lightGray).grow().padRight(50f).wrap(true)
             info.row()
-            info.add(mod.meta.shortDescription()).grow().padRight(50f).wrap()
+            info.add(mod.meta.shortDescription()).grow().padRight(50f).wrap(true)
           },
           Table { info ->
             info.top().right().defaults().right().top()

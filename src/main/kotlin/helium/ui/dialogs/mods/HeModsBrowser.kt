@@ -7,13 +7,13 @@ import arc.math.Interp
 import arc.math.geom.Rect
 import arc.scene.Group
 import arc.scene.style.Drawable
-import arc.scene.style.Style
-import arc.scene.style.TextureRegionDrawable
 import arc.scene.ui.Dialog
 import arc.scene.ui.Image
 import arc.scene.ui.Label
 import arc.scene.ui.ScrollPane
+import arc.scene.ui.TextField
 import arc.scene.ui.Tooltip
+import arc.scene.ui.layout.Cell
 import arc.scene.ui.layout.Scl
 import arc.scene.ui.layout.Table
 import arc.struct.ObjectMap
@@ -39,18 +39,16 @@ import helium.ui.dialogs.mods.ModsDialogHelper.buildStars
 import helium.ui.dialogs.mods.ModsDialogHelper.buildStatus
 import helium.ui.dialogs.mods.ModsDialogHelper.getModList
 import helium.ui.dialogs.mods.ModsDialogHelper.showDownloadModDialog
-import helium.ui.dialogs.mods.ModsDialogHelper.switchBut
 import helium.ui.elements.HeCollapser
-import helium.util.Downloader
+import helium.util.ImageCache
 import helium.util.ModStat
+import helium.util.VersionCompareHelper.tryCompareVersion
 import mindustry.Vars
 import mindustry.gen.Icon
-import mindustry.gen.Tex
 import mindustry.graphics.Pal
 import mindustry.ui.FileChooser
 import mindustry.ui.Styles
 import mindustry.ui.dialogs.BaseDialog
-import universe.ui.markdown.Markdown
 import universe.ui.markdown.MarkdownStyles
 import kotlin.math.max
 import kotlin.math.min
@@ -61,25 +59,13 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
       add(CullTable(background).also { t -> build?.also { it.get(t) } })
   }
 
-  enum class FavoritesMode {
-    Local,
-    Github,
-  }
-
-  /** 真正的重建实现，在构建 ScrollPane 时赋值 */
   private lateinit var rebuildListNow: () -> Unit
 
-  /** 构造线程即游戏主线程；用于判断回调当前在哪个线程 */
+  /** 模组图标、头像等远程图片的缓存：同一个 url 只下载一次，失败的条目会被移除以便下次重试 */
+  private val imageCache = ImageCache()
+
   private val mainThread = Thread.currentThread()
 
-  /**
-   * 重建入口：**保证只在主线程执行**。
-   *
-   * 场景图不能被异步回调改。曾经 GitHub 登录失败的回调在 HTTP 线程里直接 `hide()` + 重建列表，
-   * 与渲染线程的 `Table.layout()/computeSize()` 并发，抛 `ArrayIndexOutOfBoundsException`
-   * （实测 `Table.computeSize:940` 的 `Index 1 out of bounds for length 1`、
-   * `Table.layout:1092` 的 `Index 8 out of bounds for length 8`）。这里兜底，即使调用方漏了线程判断也不会崩。
-   */
   private fun rebuildList() {
     runOnMain { if (::rebuildListNow.isInitialized) rebuildListNow() }
   }
@@ -88,19 +74,16 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
     if (Thread.currentThread() === mainThread) action() else Core.app.post(action)
   }
 
-  private val browserTabs = ObjectMap<ModListing, Table>()
+  private val browserTabs = ObjectMap<ModListing, ModTab>()
 
-  private val favoritesMods = ObjectSet<Name>()
-
-  /** 收藏的仓库全名（`owner/repo`，小写）。与 [favoritesMods] 同步维护，用于按仓库地址精确匹配 */
-  private val favoriteRepos = ObjectSet<String>()
-
-  private var favoritesLoading = false
-
-  /**
-   * 收藏夹列表是否拉取失败。这是独立于登录状态的状态：
-   * 用户可能已登录（[GithubAPI.LoginState.LoggedIn]）但 star 列表没拉回来，登录枚举表达不了。
-   */
+  //Favorites
+  private val favoriteTabs = ObjectMap<AbstractFavorites, ObjectMap<ModListing, ModTab>>()
+  private val expandedFavorites = ObjectSet<AbstractFavorites>()
+  private val localFavorites = ArrayList<LocalFavorites>()
+  private var githubFavorites: GitHubStarFavorites? = null
+  private var localFavoritesLoaded = false
+  private val favorites: List<AbstractFavorites>
+    get() = githubFavorites?.let { listOf(it) + localFavorites } ?: localFavorites
   var favoritesLoadFailed = false
     private set
 
@@ -114,174 +97,63 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
     resized(::rebuild)
   }
 
-  val favoritesMode: FavoritesMode
-    get() = if (GithubAPI.usable()) FavoritesMode.Github else FavoritesMode.Local
-
-  /** @return 当前是否已登录 GitHub */
+  //Github API
   val githubLoggedIn: Boolean get() = GithubAPI.usable()
-
-  /** @return 当前登录的 GitHub 账号，未登录时为 null */
   val githubUser: GithubAPI.GithubUser? get() = GithubAPI.currUser()
-
-  /**
-   * @return 当前收藏夹/登录状态，直接取 [GithubAPI.state]，不维护平行枚举。
-   * LoggedOut 离线收藏夹 / Waiting 等待网页授权 / LoggedIn 使用账号 Star / Failed 登录失败。
-   */
   val currentFavoritesStatus: GithubAPI.LoginState get() = GithubAPI.state()
 
-  /** @return 某个 mod 是否已收藏（按当前模式判断） */
-  fun isFavorite(mod: ModListing): Boolean =
-    favoritesMods.contains(Name(mod)) || favoriteRepos.contains(mod.repo.lowercase())
+  /** @return 某个 mod 是否已被任一收藏夹收藏 */
+  fun isFavorite(mod: ModListing): Boolean = favorites.any { it.contains(mod) }
+  /** @return 某个 mod 是否已被任一收藏夹收藏 */
+  fun isFavorite(name: Name): Boolean = favorites.any { it.contains(name) }
 
-  /** @return 某个 mod 是否已收藏 */
-  fun isFavorite(name: Name): Boolean = favoritesMods.contains(name)
+  private fun ensureLocalFavorites() {
+    if (localFavoritesLoaded) return
 
-  /** @return 当前收藏夹内的仓库全名（`owner/repo`，小写） */
-  fun favoriteRepoList(): List<String> {
-    val result = ArrayList<String>(favoriteRepos.size)
-    favoriteRepos.forEach { result.add(it) }
-
-    return result
+    localFavoritesLoaded = true
+    localFavorites.addAll(LocalFavoritesStore.loadAll())
   }
 
-  /**
-   * 用 modList 的条目补全收藏夹的 [Name]。
-   *
-   * GitHub 模式下收藏夹只记录 Star 到的仓库全名（`owner/repo`），而 [Name] 的 author/name 取自仓库内
-   * mod.json / mod.hjson 的实际上报值（由索引脚本对符合 topic 条件的仓库提取），二者并不一致：
-   * 用仓库地址直接拼 [Name] 永远匹配不到 modList 里的条目。所以这里按 repo 反查条目后再取它的 [Name]。
-   *
-   * modList 未就绪时不做事：此时 [favoriteRepos] 已能按仓库地址精确匹配，等列表重建时会再次调用本方法补全。
-   */
-  private fun resolveFavoriteNames(list: OrderedMap<Name, ModListing>) {
-    if (favoriteRepos.isEmpty) return
+  private fun syncGithubFavorites() {
+    if (GithubAPI.usable()) {
+      if (githubFavorites != null) return
 
-    list.values().forEach { m ->
-      if (favoriteRepos.contains(m.repo.lowercase())) favoritesMods.add(Name(m))
-    }
-  }
-
-  fun loadLocalFavorites(){
-    favoritesMods.clear()
-    favoriteRepos.clear()
-
-    val listRaw = He.global.getString("favorite-mods", "none")
-
-    if (listRaw == "none" || listRaw.isNullOrBlank()) return
-    val list = Jval.read(listRaw).asArray()
-    list.forEach{
-      val author = it.getString("author") ?: ""
-      val name = it.getString("name") ?: ""
-
-      favoritesMods.add(Name(author, name))
-      favoriteRepos.add("${author.lowercase()}/${name.lowercase()}")
-    }
-  }
-
-  fun saveLocalFavorites() {
-    if (favoritesMode == FavoritesMode.Github) return
-
-    val list = Jval.newArray()
-    favoritesMods.forEach {
-      val mod = Jval.newObject()
-      mod.put("author", it.author)
-      mod.put("name", it.name)
-
-      list.add(mod)
-    }
-    He.global.put("favorite-mods", list.toString())
-  }
-
-  fun refreshFavorites(onDone: () -> Unit = {}) {
-    if (favoritesMode == FavoritesMode.Local) {
-      loadLocalFavorites()
-      favoritesLoadFailed = false
-      onDone()
+      githubFavorites = GitHubStarFavorites(
+        Core.bundle["dialog.mods.githubStar"],
+        onChanged = { rebuildList() },
+        onError = { error ->
+          Log.err(error)
+          UIUtils.showException(error, Core.bundle["dialog.mods.starFailed"])
+        },
+        onLoaded = { success ->
+          favoritesLoadFailed = !success
+          rebuildFavoritesView()
+        }
+      )
       return
     }
 
-    if (favoritesLoading) return
+    githubFavorites?.also { favoriteTabs.remove(it) }
+    githubFavorites = null
+    favoritesLoadFailed = false
+  }
 
-    favoritesLoading = true
+  /** 重新加载全部收藏夹 */
+  fun refreshFavorites(onDone: () -> Unit = {}) {
+    syncGithubFavorites()
+
+    localFavorites.forEach { it.loadFavorite() }
     favoritesLoadFailed = false
 
-    GithubAPI.listStarredRepos(
-      errorHandler = { error ->
-        favoritesLoading = false
-        favoritesLoadFailed = true
-
-        Log.err(error)
-        onDone()
-      }
-    ) { repos ->
-      favoritesLoading = false
-      favoritesLoadFailed = false
-      favoritesMods.clear()
-      favoriteRepos.clear()
-
-      // Star 接口只给出仓库全名，且它和 Name 的 author/name 不一致，不能在这里直接拼 Name；
-      // 先只记录仓库全名，Name 由 resolveFavoriteNames 回到 modList 中按 repo 反查（索引已就绪则立即补全）。
-      repos.forEach { favoriteRepos.add(it) }
-
-      ModsDialogHelper.modList?.also(::resolveFavoriteNames)
-
-      onDone()
-    }
+    githubFavorites?.loadFavorite()
+    onDone()
   }
 
   fun reloadFavorites() {
     refreshFavorites { rebuildFavoritesView() }
   }
 
-  fun toggleFavorite(
-    mod: ModListing,
-    onError: Cons<Throwable> = Cons{},
-    onResult: Cons<Boolean> = Cons{},
-  ) {
-    val name = Name(mod)
-    val repo = mod.repo
-    val lower = repo.lowercase()
-
-    if (favoritesMode == FavoritesMode.Local) {
-      val nowFavorite = if (favoritesMods.contains(name)) {
-        favoritesMods.remove(name)
-        favoriteRepos.remove(lower)
-        false
-      }
-      else {
-        favoritesMods.add(name)
-        favoriteRepos.add(lower)
-        true
-      }
-
-      saveLocalFavorites()
-      onResult.get(nowFavorite)
-      return
-    }
-
-    if (!GithubAPI.usable()) {
-      onError.get(IllegalStateException("no github session"))
-      return
-    }
-
-    // star/unstar 的回调已由 GithubAPI 保证在主线程投递，这里直接改状态与界面即可
-    if (favoritesMods.contains(name) || favoriteRepos.contains(lower)) {
-      GithubAPI.unstar(repo, onError) {
-        favoritesMods.remove(name)
-        favoriteRepos.remove(lower)
-        onResult.get(false)
-      }
-    }
-    else {
-      GithubAPI.star(repo, onError) {
-        favoritesMods.add(name)
-        favoriteRepos.add(lower)
-        onResult.get(true)
-      }
-    }
-  }
-
-  /** 唤起系统浏览器打开 GitHub 认证页，等待用户授权。 */
+  /** 唤起系统浏览器打开 GitHub 认证页，等待授权。 */
   fun loginGithub(
     onCode: Cons<GithubAPI.DeviceLogin> = Cons{},
     onError: Cons<Throwable> = Cons{},
@@ -306,15 +178,16 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
   /** 退出 GitHub 登录 */
   fun logoutGithub() {
     GithubAPI.logout()
-    loadLocalFavorites()
-    favoritesLoadFailed = false
+    syncGithubFavorites()
+
+    localFavorites.forEach { it.loadFavorite() }
     rebuildFavoritesView()
   }
 
   private fun rebuildFavoritesView() = rebuildList()
 
   fun rebuild(){
-    loadLocalFavorites()
+    ensureLocalFavorites()
 
     cont.clearChildren()
     cont.table { main ->
@@ -355,96 +228,19 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
         val n = max((Core.graphics.width/Scl.scl(540f)).toInt(), 1)
 
         rebuildListNow = {
-          var favCols: Array<Table>? = null
-          var normCols: Array<Table>? = null
+          val folderColumns = ObjectMap<AbstractFavorites, Array<Table>>()
 
           list.clearChildren()
-          list.add(" " + Core.bundle["dialog.mods.favorites"]).color(Pal.accent).padLeft(26f)
-          list.row()
-          list.line(Pal.accent, true, 4f).pad(6f).padLeft(20f).padRight(20f)
-          list.row()
+          buildFavoritesSection(list, n, folderColumns)
 
-          list.table(HeAssets.grayUIAlpha) { github ->
-            when(currentFavoritesStatus){
-              LoggedOut -> {
-                github.add(Core.bundle["dialog.mods.nonLogin"]).pad(4f)
-                  .wrap(true).growX().labelAlign(Align.center)
-                github.row()
-                github.button(Core.bundle["misc.login"], Icon.githubSmall, Styles.cleart, 32f){
-                  onLogin()
-                  rebuildList()
-                }.pad(4f).margin(6f)
-              }
-              Waiting -> {
-                github.image(HeAssets.loading).size(32f).pad(4f)
-                github.add(Core.bundle["dialog.mods.logining"]).padLeft(8f)
-              }
-              LoggedIn -> {
-                val user = githubUser!!
-                val avatar = Downloader.downloadLazyDrawable(
-                  user.avatarUrl,
-                  (Tex.nomap as TextureRegionDrawable).region
-                )
-
-                github.add(Core.bundle["dialog.mods.loggedStar"]).pad(4f)
-                  .wrap(true).growX().labelAlign(Align.center)
-                github.row()
-                github.table { account ->
-                  account.add(Core.bundle["dialog.mods.loginedAccount"])
-
-                  account.button({ t ->
-                    t.image(avatar).size(32f).pad(4f)
-                    t.add(user.username).pad(4f)
-                  }, Styles.cleart){
-                    Core.app.openURI(user.url)
-                  }.pad(4f).margin(6f)
-
-                  account.button(Core.bundle["misc.logout"], Icon.exitSmall, Styles.cleart, 32f){
-                    logoutGithub()
-                    rebuildList()
-                  }.pad(4f).margin(6f)
-                }
-              }
-              Failed -> {
-                github.image(HeAssets.networkError).size(32f).pad(4f)
-                github.add(Core.bundle["dialog.mods.loginFailed"], Styles.outlineLabel).padLeft(8f)
-                github.button(Core.bundle["misc.retry"], Styles.cleart){
-                  onLogin()
-                  rebuildList()
-                }.pad(4f).margin(6f)
-              }
-            }
-          }.growX().padLeft(20f).padRight(20f).margin(8f)
-          list.row()
-
-          list.cullTable { fav ->
-            if (favoritesLoadFailed) {
-              fav.table { tab ->
-                tab.image(HeAssets.networkError).size(46f).color(Color.red)
-                tab.add(Core.bundle["dialog.mods.favoritesFailed"], Styles.outlineLabel).pad(36f).padLeft(12f)
-                tab.button(Core.bundle["misc.retry"], Styles.cleart) { reloadFavorites() }.margin(6f)
-              }.fill().colspan(n)
-              fav.row()
-            }
-            else if (favoritesMods.isEmpty && favoriteRepos.isEmpty) {
-              fav.table { tab ->
-                tab.image(Icon.box).size(46f).color(Pal.accent)
-                tab.add(Core.bundle["dialog.mods.noFavorites"]).pad(36f).padLeft(12f)
-              }.fill().colspan(n)
-              fav.row()
-            }
-
-            favCols = Array(n) {
-              fav.cullTable(HeAssets.grayUIAlpha) {
-                it.top().defaults().growX().fillY()
-              }.width(min(540f, (Core.graphics.width - 80f)/Scl.scl())).fillY().pad(6f).get()
-            }
-          }
           list.row()
           list.add(" " + Core.bundle["dialog.mods.mods"]).color(Pal.accent).padLeft(26f)
           list.row()
           list.line(Pal.accent, true, 4f).pad(6f).padLeft(20f).padRight(20f)
           list.row()
+
+          var normCols: Array<Table>? = null
+
           list.cullTable { norm ->
             normCols = Array(n) {
               norm.cullTable(HeAssets.grayUIAlpha) {
@@ -452,6 +248,7 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
               }.width(min(540f, (Core.graphics.width - 80f)/Scl.scl())).fillY().pad(6f).get()
             }
           }
+
           getModList(
             errHandler = { e ->
               Log.err(e)
@@ -460,12 +257,9 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
               list.add(Core.bundle["dialog.mods.checkFailed"], Styles.outlineLabel)
             }
           ) { ls ->
-            var favI = 0
-            var normI = 0
+            githubFavorites?.resolve(ls)
 
-            resolveFavoriteNames(ls)
-
-            ls.values()
+            val visible = ls.values()
               .filter {
                 search.isBlank()
                 || it.name.lowercase().contains(search)
@@ -482,14 +276,20 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
                   else l.sortedBy { -it.stars }
                 }
               }
-              .forEach { m ->
-                val col =
-                  if (isFavorite(m)) favCols!![favI++%n]
-                  else normCols!![normI++%n]
-                val tab = buildModTab(m)
+              .toList()
 
-                col.add(tab).growX().fillY().pad(4f).minWidth(0f).row()
+            var normI = 0
+            visible.forEach { m ->
+              normCols!![normI++%n].add(buildModTab(m)).growX().fillY().pad(4f).minWidth(0f).row()
+            }
+
+            folderColumns.forEach { entry ->
+              var index = 0
+              visible.filter { entry.key.contains(it) }.forEach { m ->
+                entry.value[index++%n].add(buildFavoriteModTab(entry.key, m))
+                  .growX().fillY().pad(4f).minWidth(0f).row()
               }
+            }
           }
         }
 
@@ -505,6 +305,7 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
         bot.button(Core.bundle["dialog.mods.refresh"], Icon.refresh, Styles.grayt, 46f) {
           ModsDialogHelper.resetModListCache()
           browserTabs.clear()
+          favoriteTabs.clear()
 
           rebuildList()
         }
@@ -512,14 +313,292 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
         bot.button(Core.bundle["dialog.mods.importFav"], Icon.download, Styles.grayt, 46f) {
           importFavorites()
         }
-        bot.button(Core.bundle["dialog.mods.exportFav"], Icon.export, Styles.grayt, 46f) {
-          exportFavorites()
-        }
       }.growX().fillY()
     }.grow()
 
-    if (favoritesMode == FavoritesMode.Github) {
-      refreshFavorites { rebuildFavoritesView() }
+    if (GithubAPI.usable()) refreshFavorites { rebuildFavoritesView() }
+  }
+
+  private fun buildFavoritesSection(
+    list: Table,
+    n: Int,
+    folderColumns: ObjectMap<AbstractFavorites, Array<Table>>,
+  ) {
+    list.add(" " + Core.bundle["dialog.mods.favorites"]).color(Pal.accent).padLeft(26f)
+    list.row()
+    list.line(Pal.accent, true, 4f).pad(6f).padLeft(20f).padRight(20f)
+    list.row()
+
+    list.table(HeAssets.grayUIAlpha) { github ->
+      when(currentFavoritesStatus){
+        LoggedOut -> {
+          github.add(Core.bundle["dialog.mods.nonLogin"]).pad(4f)
+            .wrap(true).growX().labelAlign(Align.center)
+          github.row()
+          github.button(Core.bundle["misc.login"], Icon.githubSmall, Styles.cleart, 32f){
+            onLogin()
+            rebuildList()
+          }.pad(4f).margin(6f)
+        }
+        Waiting -> {
+          github.image(HeAssets.loading).size(32f).pad(4f)
+          github.add(Core.bundle["dialog.mods.logining"]).padLeft(8f)
+        }
+        LoggedIn -> {
+          val user = githubUser!!
+          val avatar = imageCache.resolve(user.avatarUrl)
+
+          github.add(Core.bundle["dialog.mods.loggedStar"]).pad(4f)
+            .wrap(true).growX().labelAlign(Align.center)
+          github.row()
+          github.table { account ->
+            account.add(Core.bundle["dialog.mods.loginedAccount"])
+
+            account.button({ t ->
+              t.image(avatar).size(32f).pad(4f)
+              t.add(user.username).pad(4f)
+            }, Styles.cleart){
+              Core.app.openURI(user.url)
+            }.pad(4f).margin(6f)
+
+            account.button(Core.bundle["misc.logout"], Icon.exitSmall, Styles.cleart, 32f){
+              logoutGithub()
+              rebuildList()
+            }.pad(4f).margin(6f)
+          }
+        }
+        Failed -> {
+          github.image(HeAssets.networkError).size(32f).pad(4f)
+          github.add(Core.bundle["dialog.mods.loginFailed"], Styles.outlineLabel).padLeft(8f)
+          github.button(Core.bundle["misc.retry"], Styles.cleart){
+            onLogin()
+            rebuildList()
+          }.pad(4f).margin(6f)
+        }
+      }
+    }.growX().padLeft(20f).padRight(20f).margin(8f)
+    list.row()
+
+    if (favoritesLoadFailed) {
+      list.table { tab ->
+        tab.image(HeAssets.networkError).size(46f).color(Color.red)
+        tab.add(Core.bundle["dialog.mods.favoritesFailed"], Styles.outlineLabel).pad(36f).padLeft(12f)
+        tab.button(Core.bundle["misc.retry"], Styles.cleart) { reloadFavorites() }.margin(6f)
+      }.fill().colspan(n)
+      list.row()
+    }
+
+    val folders = favorites
+    if (folders.isEmpty()) {
+      list.table { tab ->
+        tab.image(Icon.box).size(46f).color(Pal.accent)
+        tab.add(Core.bundle["dialog.mods.noFavorites"]).pad(36f).padLeft(12f)
+      }.fill().colspan(n)
+      list.row()
+      return
+    }
+
+    folders.forEach { folder ->
+      folderColumns.put(folder, addFavoritesRow(list, folder, n))
+    }
+  }
+
+  private fun addFavoritesRow(list: Table, folder: AbstractFavorites, n: Int): Array<Table> {
+    var coll: HeCollapser? = null
+    var arrowCell: Cell<Image>? = null
+    var columns: Array<Table>? = null
+
+    val expanded = expandedFavorites.contains(folder)
+
+    list.button({ t ->
+      arrowCell = t.image(if (expanded) Icon.downOpen else Icon.rightOpen).size(28f).pad(4f)
+
+      t.add(folder.name).color(Pal.accent).pad(4f).labelAlign(Align.left)
+      t.add().growX()
+
+      t.table { actions ->
+        actions.defaults().size(44f).pad(2f)
+
+        if (folder.renamable) {
+          actions.button(Icon.edit, Styles.clearNonei, 32f) { renameFavorites(folder) }
+            .addTip(Core.bundle["dialog.mods.renameFav"])
+        }
+
+        if (folder.deletable) {
+          actions.button(Icon.trash, Styles.clearNonei, 32f) { confirmDeleteFavorites(folder) }
+            .addTip(Core.bundle["dialog.mods.deleteFav"])
+        }
+
+        actions.button(Icon.export, Styles.clearNonei, 32f) { exportFavorites(folder) }
+          .addTip(Core.bundle["dialog.mods.exportFav"])
+
+        actions.addEventBlocker()
+      }.pad(4f).right()
+    }, Styles.grayt) {
+      coll?.toggle()
+
+      if (coll?.collapse == false) expandedFavorites.add(folder)
+      else expandedFavorites.remove(folder)
+    }.growX().fillY().padTop(4f).padLeft(20f).padRight(20f)
+
+    list.row()
+
+    val collapser = HeCollapser(collX = false, collY = true, collapsed = !expanded) { col ->
+      col.top()
+
+      columns = Array(n) {
+        col.cullTable(HeAssets.grayUIAlpha) {
+          it.top().defaults().growX().fillY()
+        }.width(min(540f, (Core.graphics.width - 80f)/Scl.scl())).fillY().pad(6f).get()
+      }
+    }.setDuration(0.3f, Interp.pow3Out)
+
+    coll = collapser
+    arrowCell?.update { image ->
+      image.drawable = if (coll.collapse) Icon.rightOpen else Icon.downOpen
+    }
+
+    list.add(collapser).growX().fillY().padLeft(20f).padRight(20f)
+    list.row()
+
+    return columns ?: Array(n) { Table() }
+  }
+
+  private fun confirmDeleteFavorites(folder: AbstractFavorites) {
+    UIUtils.showConfirm(
+      Core.bundle["dialog.mods.deleteFav"],
+      Core.bundle.format("dialog.mods.confirmDeleteFav", folder.name)
+    ) {
+      localFavorites.remove(folder)
+      LocalFavoritesStore.delete(folder.name)
+
+      favoriteTabs.remove(folder)
+      expandedFavorites.remove(folder)
+
+      rebuildList()
+    }
+  }
+
+  private val githubStarFavoritesName: String get() = Core.bundle["dialog.mods.githubStar"]
+
+  private fun isFavoritesNameTaken(name: String, exclude: AbstractFavorites? = null): Boolean {
+    if (name == exclude?.name) return false
+    if (name == githubStarFavoritesName) return true
+
+    return favorites.any { it !== exclude && it.name == name }
+  }
+
+  private fun isFavoritesNameUnavailable(name: String, exclude: AbstractFavorites? = null): Boolean {
+    val trimmed = name.trim()
+
+    return trimmed.isEmpty() || isFavoritesNameTaken(trimmed, exclude)
+  }
+
+  private fun showFavoritesNameDialog(
+    title: String,
+    initial: String = "",
+    exclude: AbstractFavorites? = null,
+    onConfirm: (String) -> Unit,
+  ) {
+    var name = initial
+
+    UIUtils.showPane(
+      title,
+      UIUtils.cancelBut,
+      ButtonEntry(
+        Core.bundle["confirm"],
+        Icon.ok,
+        disabled = { isFavoritesNameUnavailable(name, exclude) }
+      ) { d ->
+        // 禁用只是界面表现，这里再判一次，绝不让重名写进去
+        if (!isFavoritesNameUnavailable(name, exclude)) {
+          onConfirm(name.trim())
+          d.hide()
+        }
+      }
+    ){ t ->
+      t.add(Core.bundle["dialog.mods.favName"]).growX().left().labelAlign(Align.left)
+      t.row()
+      t.table { row ->
+        val field = row.field(initial){ name = it }.growX().fillY().get()
+        row.button(Icon.paste, Styles.clearNonei, 32f) {
+          field.text = Core.app.clipboardText
+          name = field.text
+        }.size(48f)
+      }.grow().minWidth(420f)
+      t.row()
+      t.add(Core.bundle["dialog.mods.favNameUnavailable"])
+        .color(Color.crimson).left().padTop(4f)
+        .visible { isFavoritesNameTaken(name.trim(), exclude) }
+    }
+  }
+
+  private fun renameFavorites(folder: AbstractFavorites) {
+    if (!folder.renamable) return
+
+    showFavoritesNameDialog(
+      Core.bundle["dialog.mods.renameFav"],
+      initial = folder.name,
+      exclude = folder
+    ) { name -> applyFavoritesRename(folder, name) }
+  }
+
+  private fun applyFavoritesRename(folder: AbstractFavorites, name: String) {
+    if (folder !is LocalFavorites || folder.name == name) return
+    if (isFavoritesNameTaken(name, folder)) return
+
+    // 名称是只读的：重命名 = 用新名称重建一个本地收藏夹，并顶替它原来的位置
+    val renamed = LocalFavorites(name)
+    renamed.replaceAll(folder.modList)
+
+    LocalFavoritesStore.delete(folder.name)
+
+    val index = localFavorites.indexOf(folder)
+    if (index >= 0) localFavorites[index] = renamed
+    else localFavorites.add(renamed)
+
+    if (expandedFavorites.remove(folder)) expandedFavorites.add(renamed)
+    favoriteTabs.remove(folder)
+
+    rebuildList()
+  }
+
+  private fun exportFavorites(folder: AbstractFavorites) {
+    if (folder.isEmpty) {
+      UIUtils.showTip(
+        null,
+        Core.bundle["dialog.mods.noFavorites"]
+      )
+      return
+    }
+
+    val serial = folder.toSerial()
+
+    UIUtils.showPane(
+      Core.bundle["dialog.mods.exportFav"],
+      UIUtils.closeBut,
+      ButtonEntry(Core.bundle["misc.copy"], Icon.copy) {
+        Vars.ui.showInfoFade(Core.bundle["infos.copied"])
+        Core.app.clipboardText = serial
+      },
+      ButtonEntry(Core.bundle["misc.save"], Icon.file) {
+        FileChooser.save("json").submit { f ->
+          f.writer(false).write(serial)
+        }
+      }
+    ){ t ->
+      t.add(folder.name).growX().pad(6f).left()
+        .labelAlign(Align.left).color(Pal.accent)
+      t.row()
+      t.add(Core.bundle["dialog.mods.favoritesText"]).growX().pad(6f).left()
+        .labelAlign(Align.left).color(Color.lightGray)
+      t.row()
+      t.table(HeAssets.darkGrayUIAlpha) { l ->
+        l.left().top().add(
+          serial,
+          Label.LabelStyle(MarkdownStyles.defaultMD.codeFont.fontModifier, Color.white)
+        ).pad(6f).wrap(true)
+      }.margin(12f).minWidth(420f).growX()
     }
   }
 
@@ -542,7 +621,7 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
               rebuildList()
             }
           ){ i ->
-            i.add(Core.bundle["dialog.mods.copyCode"]).growX().fillY().minWidth(500f).wrap()
+            i.add(Core.bundle["dialog.mods.copyCode"]).growX().fillY().minWidth(500f).wrap(true)
             i.row()
             i.table { c ->
               c.add(code.userCode, Styles.outlineLabel).fontScale(2.5f)
@@ -560,7 +639,6 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
           rebuildList()
         }
       },
-      // 这两个回调会 hide() 对话框并重建列表，都是在动场景图，必须钉在主线程
       onError = {
         runOnMain {
           codePane?.hide()
@@ -577,228 +655,362 @@ class HeModsBrowser: BaseDialog(Core.bundle["mods.browser"]) {
   }
 
   private fun importFavorites() {
-    UIUtils.showInput(
-      Core.bundle["dialog.mods.importFav"],
-      Core.bundle["dialog.mods.inputFavText"],
-      true
-    ){ d, t ->
-      val repos = t.split(";").map { it.trim() }.toSet()
-      getModList { list ->
-        list.values()
-          .filter { repos.contains(it.repo) }
-          .forEach { m ->
-            val key = "mod.favorites.${m.internalName}"
-            He.global.put(key, true)
-          }
+    var favName = ""
+    var favText = ""
+    // 收藏夹文本里解析出的名称；输入框留空时以它为准
+    var serialName: String? = null
+    var nameField: TextField? = null
 
-        rebuildList()
-        d.hide()
+    fun effectiveName(): String = favName.trim().ifBlank { serialName?.trim().orEmpty() }
+
+    // GitHub Star 的名称是保留名称，导入同样不能占用
+    fun unavailable(): Boolean = effectiveName() == githubStarFavoritesName
+
+    UIUtils.showPane(
+      Core.bundle["dialog.mods.importFav"],
+      UIUtils.cancelBut,
+      ButtonEntry(Core.bundle["confirm"], Icon.ok, disabled = { unavailable() }) { d ->
+        if (!unavailable()) importFavorites(d, favName, favText)
       }
+    ){ t ->
+      t.add(Core.bundle["dialog.mods.favName"]).growX().left().labelAlign(Align.left)
+      t.row()
+      t.table { row ->
+        nameField = row.field(""){ favName = it }.growX().fillY().get()
+        row.button(Icon.paste, Styles.clearNonei, 32f) {
+          nameField?.also {
+            it.text = Core.app.clipboardText
+            favName = it.text
+          }
+        }.size(48f)
+      }.grow().minWidth(420f)
+      t.row()
+      t.add(Core.bundle["dialog.mods.favNameUnavailable"])
+        .color(Color.crimson).left().padTop(4f)
+        .visible { unavailable() }
+      t.row()
+      t.add(Core.bundle["dialog.mods.inputFavText"]).growX().left().padTop(12f)
+        .labelAlign(Align.left).color(Color.lightGray)
+      t.row()
+      t.table { row ->
+        val area = row.area(""){ text ->
+          favText = text
+          serialName = parseFavorites(text)?.name
+
+          if (favName.isBlank()) {
+            serialName?.trim()?.takeIf { it.isNotEmpty() }?.also { name ->
+              nameField?.text = name
+              favName = name
+            }
+          }
+        }.grow().get()
+
+        row.button(Icon.paste, Styles.clearNonei, 32f) {
+          area.text = Core.app.clipboardText
+          favText = area.text
+          serialName = parseFavorites(favText)?.name
+        }.size(48f)
+      }.grow().minWidth(420f).maxHeight(320f)
     }
   }
 
-  private fun exportFavorites() {
-    if (favoritesMods.isEmpty){
-      UIUtils.showTip(
-        null,
-        Core.bundle["dialog.mods.noFavorites"]
-      )
+  private fun importFavorites(dialog: Dialog, name: String, text: String) {
+    val parsed = parseFavorites(text)
+    if (parsed == null) {
+      UIUtils.showTip(null, Core.bundle["dialog.mods.favInvalidText"])
       return
     }
 
-    val mods = StringBuilder()
-    favoritesMods.forEach {  m ->
-      mods.append("${m.author}/${m.name}").append(";\n")
+    val favName = name.trim().ifBlank { parsed.name?.trim().orEmpty() }
+    if (favName.isBlank()) {
+      UIUtils.showTip(null, Core.bundle["dialog.mods.favEmptyName"])
+      return
+    }
+
+    // 兜底：正常路径下确认按钮已被禁用
+    if (favName == githubStarFavoritesName) {
+      UIUtils.showTip(null, Core.bundle["dialog.mods.favNameUnavailable"])
+      return
+    }
+
+    dialog.hide()
+    createImportedFavorites(favName, parsed.mods)
+  }
+
+  private fun createImportedFavorites(name: String, mods: List<Name>) {
+    val existing = localFavorites.firstOrNull { it.name == name }
+    if (existing == null) {
+      createLocalFavorites(name, mods)
+      rebuildList()
+      return
     }
 
     UIUtils.showPane(
-      Core.bundle["dialog.mods.exportFav"],
-      UIUtils.closeBut,
-      ButtonEntry(Core.bundle["misc.copy"], Icon.copy) {
-        Vars.ui.showInfoFade(Core.bundle["infos.copied"])
-        Core.app.clipboardText = mods.toString()
+      Core.bundle["dialog.mods.importFav"],
+      ButtonEntry(Core.bundle["dialog.mods.favKeepBoth"], Icon.copy) { d ->
+        createLocalFavorites(uniqueFavoritesName(name), mods)
+        d.hide()
+        rebuildList()
       },
-      ButtonEntry(Core.bundle["misc.save"], Icon.file) {
-        FileChooser.save("zip").submit { f ->
-          f.writer(false).write(mods.toString())
-        }
-      }
+      ButtonEntry(Core.bundle["dialog.mods.favMerge"], Icon.add) { d ->
+        val merged = ArrayList<Name>(existing.modList)
+        mods.forEach { mod -> if (merged.none { it == mod }) merged.add(mod) }
+
+        existing.replaceAll(merged)
+        d.hide()
+        rebuildList()
+      }.row(),
+      ButtonEntry(Core.bundle["dialog.mods.favReplace"], Icon.ok) { d ->
+        existing.replaceAll(mods)
+        d.hide()
+        rebuildList()
+      },
+      UIUtils.cancelBut
     ){ t ->
-      t.add(Core.bundle["dialog.mods.favoritesText"]).growX().pad(6f).left()
-        .labelAlign(Align.left).color(Color.lightGray)
-      t.row()
-      t.table(HeAssets.darkGrayUIAlpha) { l ->
-        l.left().top().add(
-          mods,
-          Label.LabelStyle(MarkdownStyles.defaultMD.codeFont.fontModifier, Color.white)
-        ).pad(6f).wrap()
-      }.margin(12f).minWidth(420f).growX()
+      t.add(Core.bundle.format("dialog.mods.favExists", name)).growX().wrap(true)
     }
   }
 
-  private fun buildModTab(mod: ModListing): Table {
+  private fun uniqueFavoritesName(base: String): String {
+    var index = 2
+
+    while (localFavorites.any { it.name == "$base ($index)" }) index++
+
+    return "$base ($index)"
+  }
+
+  private fun createLocalFavorites(name: String, mods: Collection<Name>): LocalFavorites {
+    val folder = LocalFavorites(name)
+    folder.replaceAll(mods)
+    localFavorites.add(folder)
+
+    return folder
+  }
+
+  private fun showAddToFavoritesDialog(mod: ModListing) {
+    val checked = ObjectMap<AbstractFavorites, Boolean>()
+    favorites.forEach { checked.put(it, it.contains(mod)) }
+
+    fun rebuildContent(t: Table) {
+      t.clearChildren()
+      t.top().left().defaults().left().growX()
+
+      val folders = favorites
+      if (folders.isEmpty()) {
+        t.add(Core.bundle["dialog.mods.noFavorites"]).color(Color.lightGray).pad(6f).row()
+      }
+
+      folders.forEach { folder ->
+        t.button({
+          it.left().add(folder.name)
+          if (folder is GitHubStarFavorites) {
+            it.add().growX()
+            it.image(Icon.starSmall).size(24f).addTip(Core.bundle["dialog.mods.githubStarFav"])
+          }
+        }, Styles.underlineb) {
+          checked[folder] = !checked[folder]
+        }.margin(10f).marginLeft(14f).pad(6f).update {
+          it.isChecked = checked[folder]
+        }
+
+        t.row()
+      }
+
+      t.row()
+      t.button(Core.bundle["dialog.mods.newFav"], Icon.add, Styles.flatt) {
+        showNewFavoritesDialog { folder ->
+          checked.put(folder, true)
+          rebuildContent(t)
+        }
+      }.pad(6f).left().margin(6f)
+      t.row()
+    }
+
+    UIUtils.showPane(
+      Core.bundle["dialog.mods.addToFav"],
+      UIUtils.cancelBut,
+      ButtonEntry(Core.bundle["confirm"], Icon.ok) { d ->
+        applyFavoritesSelection(mod, checked)
+        rebuildList()
+        d.hide()
+      }
+    ){ t -> rebuildContent(t) }
+  }
+
+  private fun applyFavoritesSelection(mod: ModListing, checked: ObjectMap<AbstractFavorites, Boolean>) {
+    val name = Name(mod)
+
+    favorites.forEach { folder ->
+      val wanted = checked.get(folder, folder.contains(mod))
+
+      when {
+        wanted && !folder.contains(mod) -> folder.addMod(name)
+        !wanted && folder.contains(mod) -> folder.removeMod(name)
+      }
+    }
+  }
+
+  private fun showNewFavoritesDialog(onCreated: (LocalFavorites) -> Unit) {
+    showFavoritesNameDialog(Core.bundle["dialog.mods.newFav"]) { name ->
+      onCreated(createLocalFavorites(name, emptyList()))
+    }
+  }
+
+  private class ParsedFavorites(val name: String?, val mods: List<Name>)
+
+  private fun parseFavorites(text: String): ParsedFavorites? {
+    val raw = text.trim()
+    if (raw.isBlank()) return null
+
+    try {
+      val json = Jval.read(raw)
+      if (json.isArray) return ParsedFavorites(null, parseMods(json))
+
+      if (json.isObject) {
+        val mods = json.get("mods") ?: return null
+        if (!mods.isArray) return null
+
+        return ParsedFavorites(json.getString("name"), parseMods(mods))
+      }
+    }
+    catch (_: Exception) {
+    }
+
+    return null
+  }
+
+  private fun parseMods(array: Jval): List<Name> {
+    val result = ArrayList<Name>()
+
+    array.asArray().forEach { entry ->
+      val name = entry.getString("name") ?: ""
+      if (name.isBlank()) return@forEach
+
+      val mod = Name(entry.getString("author") ?: "", name)
+      if (result.none { it == mod }) result.add(mod)
+    }
+
+    return result
+  }
+
+  private fun buildModTab(mod: ModListing): ModTab {
     browserTabs[mod]?.also { return it }
 
-    val modName = Name(mod)
-    val res = Table()
-    val stat = mod.checkStatus()
-    var coll: HeCollapser? = null
-    var setupContent = { _: Int -> }
+    val tab = ListingTab(mod).build()
+    browserTabs[mod] = tab
 
-    browserTabs[mod] = res
+    return tab
+  }
 
-    val iconLink = "https://raw.githubusercontent.com/Anuken/MindustryMods/master/icons/" + mod.repo.replace("/", "_")
-    val image = Downloader.downloadLazyDrawable(iconLink, Core.atlas.find("nomap"))
-    val loaded = Vars.mods.getMod(mod.internalName)
+  private fun buildFavoriteModTab(folder: AbstractFavorites, mod: ModListing): ModTab {
+    val cache = favoriteTabs.get(folder) ?: ObjectMap<ModListing, ModTab>().also { favoriteTabs.put(folder, it) }
 
-    res.button(
-      { top ->
-        top.table(Tex.buttonSelect) { icon ->
-          icon.stack(
-            Image(image).setScaling(Scaling.fit),
-            Table { stars ->
-              stars.bottom().left()
-              buildStars(stars, mod)
-            }
-          ).size(80f)
-        }.pad(10f).margin(4f).size(88f)
-        top.stack(
-          Table { info ->
-            info.left().top().margin(12f).marginLeft(6f).defaults().left()
-            info.add(mod.name).color(Pal.accent).growX().labelAlign(Align.left).padRight(160f).wrap(true)
-            info.row()
-            info.add(mod.version, 0.8f).color(Color.lightGray).growX().padRight(50f).wrap(true)
-            info.row()
-            info.add(mod.shortDescription()).growY().growX().padRight(50f).wrap(true)
-          },
-          Table { over ->
-            over.right()
+    cache.get(mod)?.also { return it }
 
-            over.table { status ->
-              status.top().defaults().size(26f).pad(4f)
+    val tab = buildModTab(mod).clone()
+    tab.favoriteOwner = folder
+    cache.put(mod, tab)
 
-              loaded?.also { loaded ->
-                if (loaded.meta.version != mod.version) {
-                  status.image(Icon.starSmall).scaling(Scaling.fit).color(HeAssets.lightBlue)
-                    .addTip(Core.bundle["dialog.mods.newVersion"])
-                }
-                else {
-                  status.image(Icon.okSmall).scaling(Scaling.fit).color(Pal.heal)
-                    .addTip(Core.bundle["dialog.mods.installed"])
-                }
-              }
+    return tab
+  }
 
-              buildModAttrIcons(status, stat)
-            }.fill().pad(4f)
+  private inner class ListingTab(private val mod: ModListing) : ModTab(
+    mod.name,
+    mod.version,
+    mod.shortDescription(),
+    mod.author,
+  ) {
+    private val modName = Name(mod)
+    private val stat = mod.checkStatus()
+    private val loaded = Vars.mods.getMod(mod.internalName)
+    private val iconUrl =
+      "https://raw.githubusercontent.com/Anuken/MindustryMods/master/icons/" + mod.repo.replace("/", "_")
 
-            over.table { side ->
-              side.line(Color.darkGray, false, 3f)
-              side.table { buttons ->
-                buttons.defaults().size(48f)
-                buttons.button(Icon.star, Styles.clearNonei, 24f) {
-                  toggleFavorite(
-                    mod,
-                    onError = { e ->
-                      UIUtils.showException(e, Core.bundle["dialog.mods.starFailed"])
-                      Log.err(e)
-                    },
-                    onResult = { rebuildList() }
-                  )
-                }.update { b ->
-                  b.image.setScale(0.9f)
-                  b.style.imageUpColor = if (favoritesMods.contains(modName)) Pal.accent else Color.white
-                }
+    override fun buildCopy(): ModTab = ListingTab(mod)
 
-                buttons.row()
-                buttons.button(Icon.downloadSmall, Styles.clearNonei, 48f) {
-                  showDownloadModDialog(mod) {
-                    browserTabs.clear()
-                    He.heModsDialog.rebuildMods()
-                    rebuildList()
-                  }
-                }
-                buttons.row()
+    override fun icon(): Drawable = imageCache.resolve(iconUrl)
 
-                buttons.addEventBlocker()
-              }.fill()
-            }.fill()
-          }
-        ).grow()
-      }, Styles.grayt) {
-      coll!!.toggle()
-      if (!coll!!.collapse){
-        setupContent(0)
+    override fun decorateIcon(icon: Table) {
+      icon.stack(
+        Image(icon()).setScaling(Scaling.fit),
+        Table { stars ->
+          stars.bottom().left()
+          buildStars(stars, mod)
+        }
+      ).size(80f)
+    }
+
+    override fun styleTitle(cell: Cell<Label>) = cell.growX().labelAlign(Align.left)
+
+    override fun styleVersion(cell: Cell<Label>) = cell.growX()
+
+    override fun styleSubtitle(cell: Cell<Label>) = cell.growY().growX()
+
+    override fun buildCornerStatus(status: Table) {
+      loaded?.also { loaded ->
+        if (tryCompareVersion(loaded.meta.version, mod.version) < 0) {
+          status.image(Icon.starSmall).scaling(Scaling.fit).color(HeAssets.lightBlue)
+            .addTip(Core.bundle["dialog.mods.newVersion"])
+        }
+        else {
+          status.image(Icon.okSmall).scaling(Scaling.fit).color(Pal.heal)
+            .addTip(Core.bundle["dialog.mods.installed"])
+        }
       }
-    }.growX().fillY()
 
-    res.row()
-    coll = res.add(HeCollapser(collX = false, collY = true, collapsed = true, Styles.grayPanel) { col ->
-      col.table { details ->
-        details.left().defaults().growX().pad(4f).padLeft(12f).padRight(12f)
+      buildModAttrIcons(status, stat)
+    }
 
-        details.add(Core.bundle.format("dialog.mods.author", mod.author))
-          .growX().padRight(50f).wrap(true).color(Pal.accent).labelAlign(Align.left)
-        details.row()
-        details.table { link ->
-          link.left().image(Icon.githubSmall).scaling(Scaling.fit).size(24f).color(Color.lightGray)
-          val linkButton = link.button("...", Styles.nonet) {}
-            .padLeft(4f).wrapLabel(true)
-            .growX().left().align(Align.left).height(30f).disabled(true).get()
+    override fun buildSideButtons(buttons: Table) {
+      buttons.button(Icon.star, Styles.clearNonei, 24f) {
+        val owner = favoriteOwner
 
-          linkButton.label.setAlignment(Align.left)
-          linkButton.label.setFontScale(0.9f)
-
-          val url = "https://github.com/${mod.repo}"
-          linkButton.isDisabled = false
-          linkButton.setText(url)
-          linkButton.clicked { Core.app.openURI(url) }
+        // 收藏夹分栏内的卡片：强调色按钮只负责把此 mod 移出所在的收藏夹
+        if (owner != null) {
+          owner.removeMod(modName)
+          rebuildList()
         }
-        details.row()
-        details.table { status ->
-          status.left().defaults().left()
-
-          loaded?.also { loaded ->
-            if (loaded.meta.version != mod.version) {
-              buildStatus(status, Icon.starSmall, Core.bundle["dialog.mods.newVersion"], HeAssets.lightBlue)
-            }
-            else {
-              buildStatus(status, Icon.okSmall, Core.bundle["dialog.mods.installed"], Pal.heal)
-            }
-          }
-
-          buildModAttrList(status, stat)
+        else showAddToFavoritesDialog(mod)
+      }.update { b ->
+        b.image.setScale(0.9f)
+        // 不再按"是否被收藏"着色：只有已登录且该 mod 已被 Star 时才用强调色
+        b.style.imageUpColor = when {
+          favoriteOwner != null -> Pal.accent
+          githubFavorites?.contains(mod) == true -> Pal.accent
+          else -> Color.white
         }
-        details.row()
-        details.line(Color.gray, true, 4f).pad(6f).padLeft(-6f).padRight(-6f)
-        details.row()
+      }
 
-        var current = -1
-        details.table { switch ->
-          switch.left().defaults().center()
-          switch.button({ it.add(Core.bundle["dialog.mods.description"], 0.85f) }, switchBut) { setupContent(0) }
-            .margin(12f).checked { current == 0 }.disabled { t -> t.isChecked }
-          switch.button({ it.add(Core.bundle["dialog.mods.rawText"], 0.85f) }, switchBut) { setupContent(1) }
-            .margin(12f).checked { current == 1 }.disabled { t -> t.isChecked }
-        }.grow().padBottom(0f)
-        details.row()
-        details.table(HeAssets.grayUI) { desc ->
-          desc.defaults().grow()
-          setupContent = a@{ i ->
-            if (i == current) return@a
+      buttons.row()
+      buttons.button(Icon.downloadSmall, Styles.clearNonei, 48f) {
+        showDownloadModDialog(mod) {
+          browserTabs.clear()
+          favoriteTabs.clear()
+          He.heModsDialog.rebuildMods()
+          rebuildList()
+        }
+      }
+      buttons.row()
 
-            desc.clearChildren()
-            current = i
+      buttons.addEventBlocker()
+    }
 
-            when (i) {
-              0 -> desc.add(Markdown(mod.description?:"", MarkdownStyles.defaultMD))
-              1 -> desc.add(mod.description).wrap(true)
-            }
-          }
-        }.grow().margin(12f).padTop(0f)
-      }.grow()
-    }.also { it.setDuration(0.3f, Interp.pow3Out) }).growX().fillY().colspan(2).get()
+    override fun buildStatusRows(status: Table) {
+      loaded?.also { loaded ->
+        if (tryCompareVersion(loaded.meta.version, mod.version) < 0) {
+          buildStatus(status, Icon.starSmall, Core.bundle["dialog.mods.newVersion"], HeAssets.lightBlue)
+        }
+        else {
+          buildStatus(status, Icon.okSmall, Core.bundle["dialog.mods.installed"], Pal.heal)
+        }
+      }
 
-    return res
+      buildModAttrList(status, stat)
+    }
+
+    override fun linkName() = modName
+
+    override fun description() = mod.description
   }
 
   private class CullTable: Table{

@@ -38,12 +38,7 @@ class StatusDisplayProvider: DisplayProvider<Statusc, StatusDisplay>(){
   override fun targetGroup() = listOf(TargetGroup.unit)
   override fun valid(entity: Posc) = entity is Statusc
   override fun enabled() = He.config.enableUnitStatusDisplay
-  override fun provide(
-    entity: Statusc,
-    id: Int
-  ) = StatusDisplay(entity, id).apply {
-    singleWidth = iconSize
-  }
+  override fun create() = StatusDisplay()
 
   override fun buildConfig(table: Table) {
     table.image(Icon.layers).size(80f).scaling(Scaling.fit)
@@ -58,16 +53,24 @@ class StatusDisplayProvider: DisplayProvider<Statusc, StatusDisplay>(){
   }
 }
 
-class StatusDisplay(
-  entity: Statusc,
-  id: Int
-): EntityInfoDisplay<Statusc>(entity, id) {
+class StatusDisplay: EntityInfoDisplay<Statusc>() {
   override val typeID: Int get() = 1237687141
 
   var singleWidth = 1f
   val statusList = Seq<StatusEffect>()
 
   override val layoutSide: Side = Side.TOP
+
+  override fun initialize(entity: Statusc, id: Int, owner: DisplayProvider<*, *>?) {
+    super.initialize(entity, id, owner)
+    singleWidth = iconSize
+  }
+
+  override fun recycle() {
+    super.recycle()
+    singleWidth = 1f
+    statusList.clear()
+  }
 
   override val prefHeight: Float
     get() = iconSize

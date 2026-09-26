@@ -25,7 +25,7 @@ import arc.struct.Seq
 import arc.util.Scaling
 import arc.util.Time
 import arc.util.Tmp
-import arc.util.pooling.Pools
+import arc.util.pooling.Pool
 import helium.He
 import helium.He.config
 import helium.addEventBlocker
@@ -107,6 +107,18 @@ class EntityInfoFrag {
   )
   private val hovering = ObjectSet<EntityEntry>()
   private val holding = ObjectSet<EntityEntry>()
+
+  /**
+   * EntityEntry 对象池。free 时经 reset -> [EntityEntry.recycle] 断开实体/显示器引用，
+   * 否则池会把已死亡的单位与建筑一直钉住（这正是池化必须配 reset 的原因）。
+   */
+  private val entryPool = object: Pool<EntityEntry>(64, 2048) {
+    override fun newObject() = EntityEntry()
+
+    override fun reset(entry: EntityEntry) {
+      entry.recycle()
+    }
+  }
 
   private var selecting = false
   private var clearTimer = 0f
@@ -469,7 +481,7 @@ class EntityInfoFrag {
 
       override fun act(delta: Float) {
         if (!config.enableEntityInfoDisplay){
-          if (entityEntries.any()) clearEntry()
+          if (entityEntries.any() || hoveringEntries.any()) clearEntry()
           shouldSetup = true
           return
         }
@@ -482,6 +494,7 @@ class EntityInfoFrag {
         super.act(delta)
 
         updateShowing()
+        pruneEntries()
         update(delta*60)
       }
     }
@@ -504,14 +517,17 @@ class EntityInfoFrag {
   fun addEntry(entity: Entityc, hovering: Boolean = false): EntityEntry? {
     if (entity !is Teamc) return null
 
-    //val entry = poolObtain{ EntityEntry(entity, hovering) }
-    val entry = EntityEntry(entity, hovering)
+    val entry = entryPool.obtain()
+    entry.initialize(entity, hovering)
 
     (if (hovering) hoveringProviders else providers).forEach { prov ->
       if (prov.enabled() && prov.valid(entity)) {
         prov as DisplayProvider<Teamc, *>
         val display = prov.provide(entity, entity.id())
-        Core.app.post { display.team = entity.team() } // post handle
+        //team() 要等实体构造完成才可靠，所以延后一帧；池化后必须校验这期间实例没被回收、也没被复用给别的实体
+        Core.app.post {
+          if (!display.pooled && display.entity === entity) display.team = entity.team()
+        }
 
         if (display is InputEventChecker) {
           display as InputEventChecker
@@ -523,39 +539,65 @@ class EntityInfoFrag {
     }
 
     if (entry.displays.any()) {
-      if (hovering) {
-        hoveringEntries[entity.id()] = entry
-        hoveringList.add(entry)
+      val id = entity.id()
+      val map = if (hovering) hoveringEntries else entityEntries
+      val list = if (hovering) hoveringList else entriesList
+
+      map.get(id)?.let { old -> if (old !== entry) dispose(old, hovering) }
+
+      if (!list.add(entry)) {
+        removeElements(entry)
+        entry.displays.forEach { display -> display.freeToPool() }
+        entryPool.free(entry)
+        return null
       }
-      else {
-        entityEntries[entity.id()] = entry
-        entriesList.add(entry)
-      }
+
+      map[id] = entry
 
       return entry
     }
 
     return null
   }
-  fun removeEntry(entity: Entityc, hovering: Boolean = false) {
-    if (hovering) {
-      hoveringEntries.remove(entity.id())?.let { hov ->
-        hoveringList.remove(hov)
 
-        hov.displays.forEach { display ->
-          if (display is InputEventChecker) display.element.remove()
-        }
-      }
+  private fun dispose(entry: EntityEntry, hovering: Boolean, listIndex: Int = -1) {
+    val id = entry.entity.id()
+
+    if (hovering) {
+      if (hoveringEntries.get(id) === entry) hoveringEntries.remove(id)
+      if (listIndex >= 0) hoveringList.removeIndex(listIndex) else hoveringList.remove(entry)
     }
     else {
-      entityEntries.remove(entity.id())?.let { ent ->
-        entriesList.remove(ent)
-
-        ent.displays.forEach { display ->
-          if (display is InputEventChecker) display.element.remove()
-        }
-      }
+      if (entityEntries.get(id) === entry) entityEntries.remove(id)
+      if (listIndex >= 0) entriesList.removeIndex(listIndex) else entriesList.remove(entry)
     }
+
+    this.hovering.remove(entry)
+    entry.hovering = false
+    holding.remove(entry)
+    entry.holding = false
+
+    removeElements(entry)
+
+    //display 也要归还各自的池，否则池化等于没生效
+    entry.displays.forEach { display -> display.freeToPool() }
+
+    //arc 的 Pool.free 不检查重复归还，而重复归还会让同一个实例被取出两次，用标记兜一层
+    if (!entry.pooled) {
+      entry.pooled = true
+      entryPool.free(entry)
+    }
+  }
+
+  private fun removeElements(entry: EntityEntry) {
+    entry.displays.forEach { display ->
+      if (display is InputEventChecker) display.detachElement()
+    }
+  }
+
+  fun removeEntry(entity: Entityc, hovering: Boolean = false) {
+    val entry = if (hovering) hoveringEntries.get(entity.id()) else entityEntries.get(entity.id())
+    if (entry != null) dispose(entry, hovering)
   }
 
   fun setupEntry(){
@@ -565,6 +607,7 @@ class EntityInfoFrag {
     providers.forEach {
       val groups = it.targetGroup()
       if (groups.contains(TargetGroup.all) ) {
+        TargetGroup.all.ensureHooked()
         Groups.all.forEach(::addEntry)
         return
       }
@@ -572,18 +615,19 @@ class EntityInfoFrag {
     }
 
     targets.forEach {
+      it.ensureHooked()
       it.get().forEach(::addEntry)
     }
   }
 
   fun clearEntry() {
-    hoveringList.forEach { Pools.free(it) }
-    hoveringList.clear()
-    hoveringEntries.clear()
+    while (hoveringList.isNotEmpty()) dispose(hoveringList.array[0]!!, true, 0)
+    while (entriesList.isNotEmpty()) dispose(entriesList.array[0]!!, false, 0)
 
-    entriesList.forEach { Pools.free(it) }
-    entriesList.clear()
+    hoveringEntries.clear()
     entityEntries.clear()
+    hovering.clear(32)
+    holding.clear(32)
   }
 
   fun drawWorld(){
@@ -625,7 +669,7 @@ class EntityInfoFrag {
       }
     }
 
-    (entriesList + hoveringList).forEach { e ->
+    forEachEntry { e ->
       if (!e.inFog && e.holding) {
         val rad = e.size*1.44f
         val ent = e.entity
@@ -690,7 +734,11 @@ class EntityInfoFrag {
     }
     else selectionRect.set(mouse.x, mouse.y, 0f, 0f)
 
-    entriesList.forEach { it.player = null }
+    var playerIndex = 0
+    while (playerIndex < entriesList.size) {
+      entriesList.array[playerIndex]!!.player = null
+      playerIndex++
+    }
     Groups.player.forEach { player ->
       player.unit()?.also {
         entityEntries[it.id]?.player = player
@@ -764,7 +812,19 @@ class EntityInfoFrag {
       else e.alpha = Mathf.approachDelta(e.alpha, 0f, 0.05f)
 
       if (e.alpha <= 0){
-        removeEntry(e.entity, true)
+        dispose(e, true, i)
+        i--
+      }
+      i++
+    }
+  }
+
+  private fun pruneEntries() {
+    var i = 0
+    while (i < entriesList.size) {
+      val e = entriesList.array[i]!!
+      if (!e.entity.isAdded || entityEntries.get(e.entity.id()) !== e) {
+        dispose(e, false, i)
         i--
       }
       i++
@@ -788,14 +848,28 @@ class EntityInfoFrag {
     }
   }
 
+  /**零分配遍历。`(entriesList + hoveringList).forEach {}` 每调用一次都会分配一个 ArrayList*/
+  private inline fun forEachEntry(action: (EntityEntry) -> kotlin.Unit) {
+    var i = 0
+    while (i < entriesList.size) {
+      action(entriesList.array[i]!!)
+      i++
+    }
+    i = 0
+    while (i < hoveringList.size) {
+      action(hoveringList.array[i]!!)
+      i++
+    }
+  }
+
   @Suppress("UNCHECKED_CAST")
   private fun update(delta: Float) {
     val alpha = config.entityInfoAlpha
     val playerTeam = Vars.player.team()
-    (entriesList + hoveringList).forEach { ent ->
+    forEachEntry { ent ->
       val inFog = ent.entity.inFogTo(playerTeam)
       ent.inFog = inFog
-      if (inFog) return@forEach
+      if (inFog) return@forEachEntry
       val a = if (ent.isHovering) ent.alpha*alpha else alpha
       ent.displays.forEach { dis ->
         dis.update(delta, a, ent.hovering, ent.holding)
@@ -809,8 +883,8 @@ class EntityInfoFrag {
 
     Draw.sort(true)
 
-    (entriesList + hoveringList).forEach { e ->
-      if (e.inFog) return@forEach
+    forEachEntry { e ->
+      if (e.inFog) return@forEachEntry
       var offsetLeft = 0f
       var offsetRight = 0f
       var offsetTop = 0f
@@ -945,11 +1019,23 @@ class EntityInfoFrag {
   private fun lineHeight() = Fonts.outline.capHeight*(0.25f/Scl.scl(1.0f)) + 3.0f
 }
 
-class EntityEntry(
-  val entity: Teamc,
-  val isHovering: Boolean
-): SerialObject {
+class EntityEntry: SerialObject {
+  /**池化实例在 [recycle] 后不再持有实体，因此用可空背板 + 非空访问器（调用点无需改动）*/
+  private var backingEntity: Teamc? = null
+
+  var entity: Teamc
+    get() = backingEntity ?: throw IllegalStateException("EntityEntry has been recycled")
+    set(value) { backingEntity = value }
+
+  /**条目类型（持久条目 / 仅悬浮条目）。只读：仅由 [initialize] 设置，避免与 [hovering] 的 JVM setter 冲突*/
+  private var hoverKind = false
+  val isHovering: Boolean get() = hoverKind
+
+  /**是否已归还对象池：arc 的 Pool.free 不检查重复，重复归还由这个标记挡住*/
+  var pooled = false
+
   override var indexes = intArrayOf(-1, -1)
+  override var tags = intArrayOf(0, 0)
   var player: Playerc? = null
 
   var holding = false
@@ -960,6 +1046,45 @@ class EntityEntry(
   var showing = false
 
   var displays = Seq<EntityInfoDisplay<*>>()
+
+  /**
+   * 从对象池取出后必须调用。
+   * arc 的 [Pool.obtain] 只负责弹出实例、不会重置，若不复位就会沿用上一轮的实体与状态
+   * —— 这正是旧池化写法（`poolObtain { EntityEntry(entity, hovering) }`）不能用、只能注掉的原因。
+   */
+  fun initialize(entity: Teamc, hovering: Boolean) {
+    backingEntity = entity
+    hoverKind = hovering
+    pooled = false
+    player = null
+    holding = false
+    this.hovering = false
+    inFog = false
+    alpha = 0f
+    showing = false
+    displays.clear()
+    indexes[0] = -1
+    indexes[1] = -1
+    tags[0] = 0
+    tags[1] = 0
+  }
+
+  /**归还对象池时调用（由 [Pool.free] 的 reset 钩子触发）：断开强引用，避免池钉住已死亡的世界对象*/
+  fun recycle() {
+    displays.clear()
+    player = null
+    holding = false
+    hovering = false
+    inFog = false
+    alpha = 0f
+    showing = false
+    pooled = true
+    backingEntity = null
+    indexes[0] = -1
+    indexes[1] = -1
+    tags[0] = 0
+    tags[1] = 0
+  }
 
   val size: Float
     get() = entity.let { when (it) {

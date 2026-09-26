@@ -61,7 +61,7 @@ class Installer: Mod() {
                   bar.row()
                   bar.add(Core.bundle.get("dialog.installPack.description")).color(Color.gray)
                   bar.row()
-                  bar.add(model.description).wrap().grow().top()
+                  bar.add(model.description).wrap(true).grow().top()
                     .minWidth(280f).labelAlign(Align.topLeft)
                   bar.row()
                   bar.add(Core.bundle.get("dialog.installPack.contains")).color(Color.gray)
@@ -99,7 +99,7 @@ class Installer: Mod() {
                   tab.row()
                   tab.add("").update { desc ->
                     desc.setText(model.type.description)
-                  }.wrap().pad(12f).growX().color(Color.lightGray)
+                  }.wrap(true).pad(12f).growX().color(Color.lightGray)
                 }.color(Pal.darkestGray.cpy().a(0.7f))
                 opt.row()
                 opt.table(Tex.whiteui) { tab ->
@@ -127,7 +127,7 @@ class Installer: Mod() {
               hide()
               val dialog = BaseDialog(Core.bundle["dialog.installing.title"])
               dialog.cont.add("")
-                .width(500f).wrap().pad(4f)
+                .width(500f).wrap(true).pad(4f)
                 .update { l ->
                   l.setText(Core.bundle["dialog.installing.text"] + ".".repeat((Time.globalTime%30/10).toInt() + 1))
                 }

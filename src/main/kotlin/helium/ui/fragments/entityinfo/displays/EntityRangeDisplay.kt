@@ -50,46 +50,49 @@ class EntityRangeDisplayProvider: DisplayProvider<Ranged, EntityRangeDisplay>(),
     it.enableRangeDisplay && (it.showAttackRange || it.showHealRange || it.showOverdriveRange)
   }
 
-  override fun provide(
-    entity: Ranged,
-    id: Int
-  ) = EntityRangeDisplay(entity, id).apply {
-    timeOffset = Mathf.random(240f)
-    phaseOffset = Mathf.random(360f)
-    phaseScl = Mathf.random(0.9f, 1.1f)
+  override fun create() = EntityRangeDisplay()
 
-    if (entity is Building) building = entity
+  override fun initialize(display: EntityRangeDisplay, entity: Ranged, id: Int) {
+    super.initialize(display, entity, id)
+    display.timeOffset = Mathf.random(240f)
+    display.phaseOffset = Mathf.random(360f)
+    display.phaseScl = Mathf.random(0.9f, 1.1f)
+
+    if (entity is Building) display.building = entity
 
     when(entity) {
-      is Unitc -> isUnit = true
-      is BaseTurretBuild -> isTurret = true
-      is RepairTurret.RepairPointBuild -> isRepair = true
-      is RepairTower.RepairTowerBuild -> isRepair = true
-      is MendBuild -> isRepair = true
-      is OverdriveBuild -> isOverdrive = true
+      is Unitc -> display.isUnit = true
+      is BaseTurretBuild -> display.isTurret = true
+      is RepairTurret.RepairPointBuild -> display.isRepair = true
+      is RepairTower.RepairTowerBuild -> display.isRepair = true
+      is MendBuild -> display.isRepair = true
+      is OverdriveBuild -> display.isOverdrive = true
     }
 
+    //team() 要等实体构造完成才可靠，所以延后一帧；池化后必须校验这期间实例没被回收、也没被复用给别的实体
     Core.app.post {
-      layerID = when{
-        isUnit || isTurret -> {
-          color.set(entity.team().color)
-          alpha = 0.1f
+      if (display.pooled || display.entity !== entity) return@post
+
+      display.layerID = when{
+        display.isUnit || display.isTurret -> {
+          display.color.set(entity.team().color)
+          display.alpha = 0.1f
           entity.team().id
         }
-        isRepair -> {
-          color.set(Pal.heal)
-          alpha = 0.075f
+        display.isRepair -> {
+          display.color.set(Pal.heal)
+          display.alpha = 0.075f
           260
         }
-        isOverdrive -> {
-          color.set(0.731f, 0.522f, 0.425f, 1f)
-          alpha = 0.075f
+        display.isOverdrive -> {
+          display.color.set(0.731f, 0.522f, 0.425f, 1f)
+          display.alpha = 0.075f
           261
         }
         else -> 300
       }
-      color.a(0.6f)
-      layerOffset = layerID*0.01f
+      display.color.a(0.6f)
+      display.layerOffset = display.layerID*0.01f
     }
   }
 
@@ -123,10 +126,7 @@ class EntityRangeDisplayProvider: DisplayProvider<Ranged, EntityRangeDisplay>(),
   )
 }
 
-class EntityRangeDisplay(
-  entity: Ranged,
-  id: Int
-): WorldDrawOnlyDisplay<Ranged>(entity, id) {
+class EntityRangeDisplay: WorldDrawOnlyDisplay<Ranged>() {
   override val typeID: Int get() = 893475812
   var building: Building? = null
   var vis = 0f
@@ -147,6 +147,28 @@ class EntityRangeDisplay(
 
   var layerID = 0
   var layerOffset = 0f
+
+  /**归还对象池时把全部实体相关状态清干净，否则复用时会沿用上一个实体的类型/颜色/进度*/
+  override fun recycle() {
+    super.recycle()
+    building = null
+    vis = 0f
+    range = 0f
+    edges = -1
+    isUnit = false
+    isTurret = false
+    isRepair = false
+    isOverdrive = false
+    timeOffset = 0f
+    phaseOffset = 0f
+    phaseScl = 0f
+    color.set(1f, 1f, 1f, 1f)
+    alpha = 0f
+    layerID = 0
+    layerOffset = 0f
+    n = 30
+    to = 0f
+  }
 
   companion object {
     private var coneDrawing = false

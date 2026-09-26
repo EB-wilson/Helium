@@ -7,6 +7,7 @@ import arc.scene.Element
 import arc.scene.ui.layout.Table
 import arc.struct.IntMap
 import arc.struct.Seq
+import arc.util.pooling.Pool
 import mindustry.Vars
 import mindustry.async.PhysicsProcess
 import mindustry.entities.EntityGroup
@@ -18,25 +19,84 @@ import universe.util.reflect.accessField
 import java.lang.reflect.Field
 
 abstract class DisplayProvider<E, T: EntityInfoDisplay<E>>{
+  open val hoveringOnly: Boolean get() = false
+
   abstract val typeID: Int
   abstract fun targetGroup(): Iterable<TargetGroup<*>>
   abstract fun valid(entity: Posc): Boolean
   abstract fun enabled(): Boolean
-  abstract fun provide(entity: E, id: Int): T
-  open val hoveringOnly: Boolean get() = false
+  abstract fun create(): T
+
+  open fun initialize(display: T, entity: E, id: Int) {
+    display.initialize(entity, id, this)
+  }
+
+  @Suppress("UNCHECKED_CAST")
+  internal fun recycleAny(display: EntityInfoDisplay<*>) {
+    val target = display as T
+    if (target.pooled) return
+    pool.free(target)
+  }
+
+  private val pool = object: Pool<T>(16, 512) {
+    override fun newObject() = create()
+
+    override fun reset(display: T) {
+      display.recycle()
+    }
+  }
+
+  open fun provide(entity: E, id: Int): T {
+    val display = pool.obtain()
+    initialize(display, entity, id)
+    return display
+  }
 
   abstract fun buildConfig(table: Table)
 }
 
-@Suppress("UNCHECKED_CAST")
-abstract class EntityInfoDisplay<E>(
-  val entity: E,
-  val entityID: Int
-){
+abstract class EntityInfoDisplay<E>{
+  private var backingEntity: E? = null
+
+  var entity: E
+    get() = backingEntity ?: throw IllegalStateException("EntityInfoDisplay has been recycled")
+    set(value) { backingEntity = value }
+
+  var entityID: Int = -1
   var team: Team = Team.derelict
   var index: Int = -1
 
+  internal var owner: DisplayProvider<*, *>? = null
+  var pooled = false
+
   abstract val typeID: Int
+
+  open fun initialize(entity: E, id: Int, owner: DisplayProvider<*, *>? = null) {
+    backingEntity = entity
+    entityID = id
+    this.owner = owner
+    team = Team.derelict
+    index = -1
+    pooled = false
+  }
+
+  open fun recycle() {
+    backingEntity = null
+    entityID = -1
+    team = Team.derelict
+    index = -1
+    pooled = true
+  }
+
+  fun freeToPool() {
+    if (pooled) return
+    val provider = owner
+    if (provider == null) {
+      recycle()
+      return
+    }
+    provider.recycleAny(this)
+  }
 
   abstract val layoutSide: Side
   open val screenRender: Boolean get() = true
@@ -77,10 +137,7 @@ enum class Side(val dir: Int){
   BOTTOM(3)
 }
 
-abstract class WorldDrawOnlyDisplay<E>(
-  entity: E,
-  id: Int
-): EntityInfoDisplay<E>(entity, id) {
+abstract class WorldDrawOnlyDisplay<E>: EntityInfoDisplay<E>() {
   override val layoutSide: Side get() = Side.CENTER
   override val prefWidth: Float get() = 0f
   override val prefHeight: Float get() = 0f
@@ -98,11 +155,17 @@ abstract class WorldDrawOnlyDisplay<E>(
 interface InputEventChecker{
   var element: Element
   fun buildListener(): Element
+  fun detachElement()
 }
 
 open class TargetGroup<T: Entityc>(private val target: Field) {
   @Suppress("UNCHECKED_CAST")
   private val origin = target.get(null) as EntityGroup<Entityc>
+
+  private var wrapped: EntityGroup<Entityc>? = null
+  private var lastPut: Cons<T>? = null
+  private var lastRemove: Cons<T>? = null
+  private var lastClear: Runnable? = null
 
   companion object {
     private val EntityGroup<Entityc>.array: Seq<Entityc> by accessField("array")
@@ -125,11 +188,23 @@ open class TargetGroup<T: Entityc>(private val target: Field) {
   @Suppress("UNCHECKED_CAST")
   open fun reset(){
     val curr = target.get(null) as EntityGroup<Entityc>
-    if (curr == origin) return
+    if (curr === wrapped) return
     origin.array.clear()
     origin.array.addAll(curr.array)
+    origin.map = curr.map
+    origin.tree = curr.tree
 
     target.set(null, origin)
+    lastPut?.also { apply(it, lastRemove!!, lastClear!!) }
+  }
+
+  fun isHooked(): Boolean = wrapped != null && target.get(null) === wrapped
+
+  fun ensureHooked(): Boolean {
+    if (isHooked()) return false
+    val put = lastPut ?: return false
+    apply(put, lastRemove!!, lastClear!!)
+    return true
   }
 
   @Suppress("UNCHECKED_CAST")
@@ -137,6 +212,10 @@ open class TargetGroup<T: Entityc>(private val target: Field) {
 
   @Suppress("UNCHECKED_CAST")
   open fun apply(put: Cons<T>, remove: Cons<T>, clear: Runnable){
+    lastPut = put
+    lastRemove = remove
+    lastClear = clear
+
     val old = target.get(null) as EntityGroup<Entityc>
     val type = old.array.items.javaClass.componentType as Class<Entityc>
     val new = object: EntityGroup<Entityc>(type, false, false, old.indexer){
@@ -150,15 +229,23 @@ open class TargetGroup<T: Entityc>(private val target: Field) {
         remove.get(type as T)
       }
       override fun removeIndex(type: Entityc?, position: Int) {
-        val rm = array.items[position] === type
+        val exact = position >= 0 && position < array.size && array.items[position] === type
+
+        if (!exact) {
+          if (type != null) {
+            super.remove(type)
+            remove.get(type as T)
+          }
+          return
+        }
+
         super.removeIndex(type, position)
-        if (rm) remove.get(type as T)
+        remove.get(type as T)
       }
 
       override fun removeByID(id: Int) {
-        val t = map?.get(id) as? T
-        super.removeByID(id)
-        if (t != null) remove.get(t)
+        val t = map?.get(id) as? T ?: return
+        t.remove()
       }
 
       override fun clear() {
@@ -172,5 +259,6 @@ open class TargetGroup<T: Entityc>(private val target: Field) {
     new.tree = old.tree
 
     target.set(null, new)
+    wrapped = new
   }
 }

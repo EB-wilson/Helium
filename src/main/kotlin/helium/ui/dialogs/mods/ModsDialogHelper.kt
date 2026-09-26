@@ -35,6 +35,7 @@ import helium.util.JAR_MOD
 import helium.util.JS_MOD
 import helium.util.ModStat
 import helium.util.UNSUPPORTED
+import helium.util.VersionCompareHelper.tryCompareVersion
 import helium.util.toStoreSize
 import mindustry.Vars
 import mindustry.core.Version
@@ -109,7 +110,7 @@ object ModsDialogHelper {
   fun buildLinkButton(link: Table, modName: Name) {
     link.left().image(Icon.githubSmall).scaling(Scaling.fit).size(24f).color(Color.lightGray)
     val linkButton = link.button("...", Styles.nonet) {}
-      .padLeft(4f).padRight(50f).wrapLabel(true)
+      .padLeft(4f).padRight(50f).wrap(true)
       .growX().left().align(Align.left).height(30f).disabled(true).get()
 
     linkButton.label.setAlignment(Align.left)
@@ -308,11 +309,6 @@ object ModsDialogHelper {
 
             list.sortComparing { m -> parser.get(m!!.lastUpdated) }.reverse()
 
-            // 先填完再发布缓存。
-            // 以前是 `modList = OrderedMap()` 之后才开始解析填充，中间这段时间其它线程会看到
-            // "非 null 但空"的缓存，于是 line 268 的快速路径直接渲染出空列表，而且不会再有回调来救它。
-            // 未登录时首次打开最容易撞上：登录态下 refreshFavorites 完成后会再重建一次列表，
-            // 那时缓存已经填好，于是把问题掩盖了过去。
             val parsed = OrderedMap<Name, ModListing>()
             list.forEach { parsed[Name(it)] = it }
 
@@ -351,58 +347,6 @@ object ModsDialogHelper {
         }
       }.tooltip(c.localizedName)
     }
-  }
-
-  private val paragraphMatcher = "pre-alpha|alpha|beta|rc|ga|pre-release|release|stable|hotfix|build|\\d+|\\w".toRegex()
-  private val testLevel = mapOf(
-    "pre-alpha" to 0,
-    "alpha" to 1,
-    "beta" to 2,
-    "rc" to 3,
-    "ga" to 4,
-    "pre-release" to 5,
-    "blank" to 6,
-    "release" to 7,
-    "stable" to 8,
-    "hotfix" to 9
-  )
-
-  fun tryCompareVersion(aVer: String, bVer: String): Int{
-    val aParagraph = paragraphMatcher.findAll(aVer.lowercase().trimStart('v')).map {
-      it.value
-    }.toList().also { if(it.isEmpty()) return 1 }.filter { it != "build" }
-    val bParagraph = paragraphMatcher.findAll(bVer.lowercase().trimStart('v')).map {
-      it.value
-    }.toList().also { if(it.isEmpty()) return 1 }.filter { it != "build" }
-
-    val maxSize = maxOf(aParagraph.size, bParagraph.size)
-
-    0.until(maxSize).forEach { i ->
-      val pa = if (i >= aParagraph.size) "blank" else aParagraph[i]
-      val pb = if (i >= bParagraph.size) "blank" else bParagraph[i]
-
-      if (testLevel.containsKey(pa)) {
-        if (testLevel.containsKey(pb)) {
-          val res = testLevel.getValue(pa) - testLevel.getValue(pb)
-          if (res > 0) return 1
-          else if (res < 0) return -1
-        }
-        else return 1
-      }
-      else try {
-        val na = Strings.parseInt(pa)
-        val nb = Strings.parseInt(pb)
-        val res = na - nb
-        if (res > 0) return 1
-        else if (res < 0) return -1
-      } catch (_: NumberFormatException) {
-        val res = pa.compareTo(pb)
-        if (res > 0) return 1
-        else if (res < 0) return -1
-      }
-    }
-
-    return 0
   }
 
   fun showDownloadModDialog(modInfo: ModListing, callback: Runnable) {

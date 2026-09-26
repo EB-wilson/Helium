@@ -170,36 +170,6 @@ object He {
     placement.build(Vars.ui.hudGroup)
     hoveringInfo.build(Vars.ui.hudGroup)
     entityInfo.build(Vars.ui.hudGroup)
-
-    BaseDialog("").apply {
-      addCloseButton()
-
-      cont.image(object: BaseDrawable(){
-        val shader = MathShader.curveCircleShader
-        val radius = shader.getUniform("radius")
-        val curvature = shader.getUniform("curvature")
-        val roundScl = shader.getUniform("roundScale")
-
-        init {
-          radius.set(1f)
-          roundScl.set(8f)
-        }
-
-        override fun draw(x: Float, y: Float, width: Float, height: Float) {
-          curvature.set(Mathf.sin(10f, 0.05f))
-          shader.draw(
-            0.3f,
-            0.92f,
-            0.99f,
-            1.4f,
-            1.4f,
-          ){
-            Draw.rect(it, x + width/2, y + height/2, width*1.4f, height*1.4f, Time.globalTime/2f)
-            Draw.rect(it, x + width/2, y + height/2, width*1.3f, height*1.3f, -Time.globalTime/2f)
-          }
-        }
-      }).size(800f, 800f)
-    }.show()
   }
 
   private fun genGlobal() = object : Settings() {

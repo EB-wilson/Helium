@@ -94,7 +94,7 @@ tasks {
                            ).joinToString(" ") { "--classpath $it" }
 
         //dex and desugar files - this requires d8 in your PATH
-        "${d8.absolutePath} $dependencies --min-api 14 --output ${project.name}-android.jar ${project.name}-desktop.jar"
+        "${d8.absolutePath} $dependencies --min-api 26 --output ${project.name}-android.jar ${project.name}-desktop.jar"
           .execute(File("$buildDir/libs"))
       }
       catch (e: Throwable) {

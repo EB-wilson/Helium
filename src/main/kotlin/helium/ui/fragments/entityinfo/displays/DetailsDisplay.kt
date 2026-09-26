@@ -45,21 +45,16 @@ class DetailsDisplayProvider: DisplayProvider<Displayable, DetailsDisplay>(){
 
   override fun enabled() = !He.config.fixedHoveringInfoPane
 
-  override fun provide(
-    entity: Displayable,
-    id: Int,
-  ) = DetailsDisplay(entity, id).apply {
-    isHovered = false
-    teamc = null
-    showAlpha = 0.0f
-  }
+  override fun create() = DetailsDisplay()
 }
 
-class DetailsDisplay(
-  entity: Displayable,
-  id: Int
-): EntityInfoDisplay<Displayable>(entity, id), InputEventChecker {
-  override lateinit var element: Element
+class DetailsDisplay: EntityInfoDisplay<Displayable>(), InputEventChecker {
+  private var backingElement: Element? = null
+
+  override var element: Element
+    get() = backingElement ?: throw IllegalStateException("DetailsDisplay element is not attached")
+    set(value) { backingElement = value }
+
   override val typeID: Int get() = 782376428
 
   var teamc: Teamc? = null
@@ -67,6 +62,29 @@ class DetailsDisplay(
 
   var isHovered = false
   var clipped = false
+
+  override fun initialize(entity: Displayable, id: Int, owner: DisplayProvider<*, *>?) {
+    super.initialize(entity, id, owner)
+    isHovered = false
+    showAlpha = 0f
+    clipped = false
+    teamc = null
+    detachElement()
+  }
+
+  override fun recycle() {
+    super.recycle()
+    isHovered = false
+    showAlpha = 0f
+    clipped = false
+    teamc = null
+    detachElement()
+  }
+
+  override fun detachElement() {
+    backingElement?.remove()
+    backingElement = null
+  }
 
   override val layoutSide: Side get() = Side.BOTTOM
 

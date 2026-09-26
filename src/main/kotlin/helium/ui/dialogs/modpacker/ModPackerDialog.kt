@@ -5,7 +5,6 @@ import arc.files.Fi
 import arc.graphics.Color
 import arc.graphics.Texture
 import arc.graphics.g2d.TextureRegion
-import arc.math.Interp
 import arc.math.Mathf
 import arc.scene.event.HandCursorListener
 import arc.scene.event.Touchable
@@ -15,24 +14,21 @@ import arc.scene.style.TextureRegionDrawable
 import arc.scene.ui.Button
 import arc.scene.ui.ScrollPane
 import arc.scene.ui.TextButton
+import arc.scene.ui.layout.Cell
 import arc.scene.ui.layout.Scl
 import arc.scene.ui.layout.Table
-import arc.util.Align
 import arc.util.Scaling
 import helium.addEventBlocker
 import helium.ui.HeAssets
 import helium.ui.UIUtils
 import helium.ui.UIUtils.line
-import helium.ui.dialogs.mods.ModsDialogHelper.buildDescSelector
 import helium.ui.dialogs.mods.ModsDialogHelper.buildErrorIcons
-import helium.ui.dialogs.mods.ModsDialogHelper.buildLinkButton
 import helium.ui.dialogs.mods.ModsDialogHelper.buildModAttrIcons
 import helium.ui.dialogs.mods.ModsDialogHelper.buildModAttrList
 import helium.ui.dialogs.mods.ModsDialogHelper.buildModBasicStatus
 import helium.ui.dialogs.mods.ModsDialogHelper.buildModErrList
-import helium.ui.dialogs.mods.ModsDialogHelper.setupContentsList
+import helium.ui.dialogs.mods.ModTab
 import helium.ui.dialogs.mods.Name
-import helium.ui.elements.HeCollapser
 import mindustry.Vars
 import mindustry.content.Planets
 import mindustry.ctype.UnlockableContent
@@ -47,8 +43,6 @@ import mindustry.ui.Styles
 import mindustry.ui.dialogs.BaseDialog
 import mindustry.ui.dialogs.LoadDialog
 import mindustry.ui.dialogs.PlanetDialog
-import universe.ui.markdown.Markdown
-import universe.ui.markdown.MarkdownStyles
 import kotlin.math.max
 
 class ModPackerDialog: BaseDialog(Core.bundle["dialog.modPacker.title"]) {
@@ -524,7 +518,7 @@ class ModPackerDialog: BaseDialog(Core.bundle["dialog.modPacker.title"]) {
         tab.add("").update { desc ->
           val type = hoveringType ?: model.type
           desc.setText(type.description)
-        }.wrap().pad(12f).growX().color(Color.lightGray)
+        }.wrap(true).pad(12f).growX().color(Color.lightGray)
       }
 
       list.row()
@@ -749,109 +743,62 @@ class ModPackerDialog: BaseDialog(Core.bundle["dialog.modPacker.title"]) {
     }
   }
 
-  private fun buildModTab(mod: PackModel.ModEntry): Table {
-    val res = Table()
-    val stat = mod.stat
-    var coll: HeCollapser? = null
-    var setupContent = { _: Int -> }
+  private fun buildModTab(mod: PackModel.ModEntry): Table = PackEntryTab(mod).build()
 
-    res.button({ top ->
-      top.table(Tex.buttonSelect) { icon ->
-        icon.image(mod.iconTexture?.let { TextureRegionDrawable(TextureRegion(it)) } ?: Tex.nomap)
-          .scaling(Scaling.fit).size(80f)
-      }.pad(10f).margin(4f).size(88f)
-      top.stack(
-        Table{ info ->
-          info.left().top().margin(12f).marginLeft(6f).defaults().left()
-          info.add(mod.displayName).color(Pal.accent).grow().padRight(160f).wrap(true)
-          info.row()
-          info.add(mod.version, 0.8f).color(Color.lightGray).grow().padRight(50f).wrap(true)
-          info.row()
-          info.add(mod.shortDesc).grow().padRight(50f).wrap(true)
-        },
-        Table{ over ->
-          over.right()
+  /** 待打包模组的卡片：整列启用按钮，无更新检查 */
+  private inner class PackEntryTab(private val mod: PackModel.ModEntry) : ModTab(
+    mod.displayName,
+    mod.version,
+    mod.shortDesc,
+    mod.author,
+  ) {
+    private val stat = mod.stat
 
-          over.table { status ->
-            status.top().defaults().size(26f).pad(4f)
+    override fun buildCopy(): ModTab = PackEntryTab(mod)
 
-            buildModAttrIcons(status, stat)
+    override fun icon(): Drawable =
+      mod.iconTexture?.let { TextureRegionDrawable(TextureRegion(it)) } ?: Tex.nomap
 
-            buildErrorIcons(status, stat)
-          }.fill().pad(4f)
+    override fun linkName() = Name(mod.author, mod.name)
 
-          over.table { side ->
-            side.line(Color.darkGray, false, 3f)
-            side.table { buttons ->
-              buttons.defaults().width(45f).growY()
-              buttons.button(Icon.rightOpenSmall, Styles.clearNonei, 48f) {
-                mod.enabled = !mod.enabled
-                rebuildList()
-              }.fillX().growY()
-                .update { it.style.imageUp = if (mod.enabled) Icon.leftOpen else Icon.rightOpen }
+    override fun description() = mod.description
 
-              buttons.addEventBlocker()
-            }.fillX().growY()
-          }.fillX().growY().marginTop(6f).marginBottom(6f)
-        }
-      ).grow()
-    }, Styles.grayt) {
-      coll!!.toggle()
-      if (!coll!!.collapse) {
-        setupContent(0)
-      }
-    }.growX().fillY()
+    override fun contents(): List<UnlockableContent> = Vars.content.contentMap.map { it.toList() }
+      .flatten()
+      .filterIsInstance<UnlockableContent>()
+      .filter { c -> mod.name == c.minfo.mod?.name && !c.isHidden }
 
-    res.row()
-    coll = res.add(HeCollapser(collX = false, collY = true, collapsed = true, Styles.grayPanel) { col ->
-      col.table { details ->
-        details.left().defaults().growX().pad(4f).padLeft(12f).padRight(12f)
+    override fun buildCornerStatus(status: Table) {
+      buildModAttrIcons(status, stat)
 
-        details.add(Core.bundle.format("dialog.mods.author", mod.author))
-          .growX().padRight(50f).wrap(true).color(Pal.accent).labelAlign(Align.left)
-        details.row()
-        details.table { link ->
-          buildLinkButton(link, Name(mod.author, mod.name))
-        }
-        details.row()
-        details.table{ status ->
-          status.left().defaults().left()
+      buildErrorIcons(status, stat)
+    }
 
-          buildModBasicStatus(status, stat)
-          buildModAttrList(status, stat)
-          buildModErrList(status, stat)
-        }
-        details.row()
-        details.line(Color.gray, true, 4f).pad(6f).padLeft(-6f).padRight(-6f)
-        details.row()
+    override fun buildSide(side: Table) {
+      side.line(Color.darkGray, false, 3f)
+      side.table { buttons ->
+        buttons.defaults().width(45f).growY()
+        buildSideButtons(buttons)
+      }.fillX().growY()
+    }
 
-        val contents = Vars.content.contentMap.map { it.toList() }
-          .flatten()
-          .filterIsInstance<UnlockableContent>()
-          .filter { c -> mod.name == c.minfo.mod?.name && !c.isHidden }
+    override fun styleSideCell(cell: Cell<Table>) = cell.fillX().growY().marginTop(6f).marginBottom(6f)
 
-        var current = -1
-        buildDescSelector(details, { current }, setupContent, contents)
-        details.row()
-        details.table(HeAssets.grayUI) { desc ->
-          desc.defaults().grow()
-          setupContent = a@{ i ->
-            if (i == current) return@a
+    override fun buildSideButtons(buttons: Table) {
+      buttons.button(Icon.rightOpenSmall, Styles.clearNonei, 48f) {
+        mod.enabled = !mod.enabled
+        rebuildList()
+      }.fillX().growY()
+        .update { it.style.imageUp = if (mod.enabled) Icon.leftOpen else Icon.rightOpen }
 
-            desc.clearChildren()
-            current = i
+      buttons.addEventBlocker()
+    }
 
-            when (i) {
-              0 -> desc.add(Markdown(mod.description ?: "", MarkdownStyles.defaultMD))
-              1 -> desc.add(mod.description ?: "").wrap(true)
-              2 -> setupContentsList(desc, contents)
-            }
-          }
-        }.grow().margin(12f).padTop(0f)
-      }.grow()
-    }.also { it.setDuration(0.3f, Interp.pow3Out) }).growX().fillY().colspan(2).get()
-
-    return res
+    override fun buildStatusRows(status: Table) {
+      buildModBasicStatus(status, stat)
+      buildModAttrList(status, stat)
+      buildModErrList(status, stat)
+    }
   }
 
   fun buildStatus(status: Table, icon: Drawable, information: String, color: Color) {

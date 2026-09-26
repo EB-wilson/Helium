@@ -30,6 +30,8 @@ import kotlin.math.max
 object Downloader {
   const val MAX_RETRY: Int = 5
 
+  var debugInfo = false
+
   private const val RETRY_DELAY_MS: Long = 250L
   private const val BUFFER_SIZE: Int = 8192
 
@@ -145,7 +147,7 @@ object Downloader {
     } catch (e: CancellationException) {
       throw e
     } catch (e: Throwable) {
-      Log.err(e)
+      if (debugInfo) Log.err(e)
       errHandler?.get(e)
     }
   }

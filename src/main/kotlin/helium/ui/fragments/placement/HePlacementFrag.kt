@@ -356,8 +356,8 @@ class HePlacementFrag {
                   Call.setUnitCommand(
                     Vars.player,
                     units.mapInt(
-                      Intf { un: Unit? -> un!!.id },
-                      Boolf { un: Unit? -> un!!.type.allowCommand(un, command) }).toArray(),
+                      { un: Unit? -> un!!.id },
+                      { un: Unit? -> un!!.type.allowCommand(un, command) }).toArray(),
                     command
                   )
                 }.checked { activeCommands.get(command.id.toInt()) }.size(50f)
@@ -489,7 +489,8 @@ class HePlacementFrag {
           name.table { header ->
             header.left()
             header.add(Image(displayBlock.uiIcon)).size((8*4).toFloat())
-            header.labelWrap { if (!unlocked(displayBlock)) Core.bundle.get("block.unknown") else displayBlock.localizedName }
+            header.label { if (!unlocked(displayBlock)) Core.bundle.get("block.unknown") else displayBlock.localizedName }
+              .wrap(true)
               .left().growX().padLeft(5f)
           }.growX().left()
           if (unlocked(displayBlock)) {
@@ -533,7 +534,7 @@ class HePlacementFrag {
           topTable.table { b ->
             b.image(Icon.cancel).padRight(2f).color(Color.scarlet)
             b.add(if (!Vars.player.isBuilder) "@unit.nobuild" else if (!displayBlock.supportsEnv(Vars.state.rules.env)) "@unsupported.environment" else "@banned")
-              .growX().wrap()
+              .growX().wrap(true)
             b.left()
           }.padTop(2f).left()
         }
